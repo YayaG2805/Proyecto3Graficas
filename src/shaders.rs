@@ -194,6 +194,52 @@ impl Sky {
         let to_sun = (u.light_pos - u.camera_pos).normalized();
         let g = dir.dot(to_sun).max(0.0);
         c += Vec3::new(1.0, 0.55, 0.15) * (g.powf(60.0) * 0.6 + g.powf(8.0) * 0.08);
+
+        // Efecto warp (solo cuesta cuando está activo).
+        if u.warp > 0.0 {
+            c += warp_streaks(dir, u) * u.warp;
+        }
         c
     }
+}
+
+// ---------------------------------------------------------------------------
+// WARP: shader ANIMADO de "túnel de velocidad". Rayas de luz que salen del centro de la
+// vista y avanzan hacia afuera con el tiempo. Se calcula en coordenadas de la cámara:
+//   - ángulo alrededor del centro → en qué raya cae el píxel
+//   - "profundidad del túnel" = z / r → dónde va el tramo de luz a lo largo de la raya
+// ---------------------------------------------------------------------------
+/// Cuántas rayas posibles hay alrededor del centro (más = más finas y juntas).
+const WARP_SECTORS: f32 = 240.0;
+/// Qué tan rápido avanzan los tramos de luz hacia afuera.
+const WARP_SPEED: f32 = 4.0;
+
+fn warp_streaks(dir: Vec3, u: &Uniforms) -> Vec3 {
+    // Dirección del píxel en la base de la cámara.
+    let x = dir.dot(u.camera_right);
+    let y = dir.dot(u.camera_up);
+    let z = dir.dot(u.camera_forward);
+    let r = (x * x + y * y).sqrt().max(1e-4); // distancia al centro de la vista
+
+    // Tinte azul que crece hacia los bordes de la pantalla.
+    let tint = Vec3::new(0.04, 0.08, 0.25) * smoothstep(0.2, 0.8, r);
+
+    // 1. ¿En qué sector (raya) cae el píxel? Solo algunos sectores, elegidos con hash, tienen raya.
+    let s = (y.atan2(x) / std::f32::consts::TAU + 0.5) * WARP_SECTORS;
+    let h = hash01(s.floor() as i32, 0, 0, 777);
+    if h > 0.45 {
+        return tint;
+    }
+    // Raya delgada: brilla solo cerca del centro del sector.
+    let line = 1.0 - smoothstep(0.05, 0.35, (s - s.floor() - 0.5).abs());
+
+    // 2. Tramos de luz que se mueven: la fase depende de la profundidad y del TIEMPO.
+    //    Al crecer el tiempo, un mismo valor de fase ocurre a menor profundidad → se mueve hacia afuera.
+    let depth = z / r;
+    let phase = (depth * 0.6 + u.time * WARP_SPEED + h * 20.0).rem_euclid(1.0);
+    let dash = smoothstep(0.0, 0.1, phase) * (1.0 - smoothstep(0.3, 0.6, phase));
+
+    // 3. En el centro las rayas se juntan y se verían como ruido: las apagamos ahí.
+    let edge = smoothstep(0.1, 0.5, r);
+    tint + Vec3::new(0.55, 0.75, 1.0) * (line * dash * edge * 1.5)
 }

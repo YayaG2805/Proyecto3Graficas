@@ -29,6 +29,8 @@ const WINDOW_W: i32 = 1280;
 const WINDOW_H: i32 = 720;
 
 const FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
+/// Cuánto se abre el campo de visión con el warp al máximo (sensación de velocidad).
+const WARP_FOV_EXTRA: f32 = 30.0 * std::f32::consts::PI / 180.0;
 const NEAR: f32 = 0.1;
 const FAR: f32 = 2000.0;
 
@@ -45,6 +47,9 @@ struct Game {
     time: f32,
     /// Mapeo de normales encendido (tecla N).
     normal_mapping: bool,
+    /// Efecto visual del warp, de 0 a 1. Lo debe llenar la navegación (ship.rs) durante un viaje;
+    /// por ahora se prueba manteniendo Tab.
+    warp: f32,
 }
 
 impl Game {
@@ -55,7 +60,7 @@ impl Game {
         });
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
-        let uniforms = Game::make_uniforms(&camera, 0.0, true);
+        let uniforms = Game::make_uniforms(&camera, 0.0, true, 0.0);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene: Scene::new(),
@@ -66,26 +71,30 @@ impl Game {
             camera,
             time: 0.0,
             normal_mapping: true,
+            warp: 0.0,
         }
     }
 
-    fn make_uniforms(camera: &ChaseCamera, time: f32, normal_mapping: bool) -> Uniforms {
+    fn make_uniforms(camera: &ChaseCamera, time: f32, normal_mapping: bool, warp: f32) -> Uniforms {
+        // Con warp el campo de visión se abre: los bordes "se estiran" y parece que vamos más rápido.
+        let fov_y = FOV_Y + warp * WARP_FOV_EXTRA;
         let (r, u, f) = camera.basis();
         let aspect = RENDER_W as f32 / RENDER_H as f32;
         Uniforms {
             time,
             view: camera.view(),
-            projection: Mat4::perspective(FOV_Y, aspect, NEAR, FAR),
+            projection: Mat4::perspective(fov_y, aspect, NEAR, FAR),
             camera_pos: camera.position,
             camera_right: r,
             camera_up: u,
             camera_forward: f,
-            fov_y: FOV_Y,
+            fov_y,
             aspect,
             near: NEAR,
             far: FAR,
             light_pos: Vec3::ZERO, // el sol está en el origen
             normal_mapping,
+            warp,
         }
     }
 
@@ -108,7 +117,7 @@ impl Game {
 
     /// Etapas 1 a 7 (vértices, recorte, rasterizado, z-buffer). El sombreado va aparte.
     fn draw_geometry(&mut self) {
-        let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping);
+        let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
@@ -120,16 +129,19 @@ impl Game {
 /// Sirve para probar el renderer sin abrir la ventana.
 fn snapshot() {
     let mut g = Game::new();
-    // (archivo, posición de la nave, mapeo de normales)
+    // (archivo, posición de la nave, mapeo de normales, warp)
     let shots = [
-        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), true),
-        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), true),
-        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), true),
+        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), true, 0.0),
+        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), true, 0.0),
+        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), true, 0.0),
         // Misma vista sin mapeo de normales, para comparar.
-        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), false),
+        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), false, 0.0),
+        // Efecto warp al máximo.
+        ("snap_warp.ppm", Vec3::new(0.0, 25.0, 95.0), true, 1.0),
     ];
-    for (name, pos, normal_mapping) in shots {
+    for (name, pos, normal_mapping, warp) in shots {
         g.normal_mapping = normal_mapping;
+        g.warp = warp;
         g.ship.position = pos;
         // Apuntar la nave hacia el planeta rocoso.
         let target = g.scene.bodies[1].position(g.time);
@@ -208,6 +220,11 @@ fn main() {
             show_help = !show_help;
         }
 
+        // PRUEBA del efecto warp: mantener Tab lo sube hasta 1 y al soltar baja a 0 (suave, con dt).
+        // Cuando la navegación tenga el viaje warp de verdad, ella debe llenar `game.warp`.
+        let warp_target = if rl.is_key_down(KeyboardKey::KEY_TAB) { 1.0 } else { 0.0 };
+        game.warp += (warp_target - game.warp) * (1.0 - (-3.0 * dt).exp());
+
         let input = read_input(&rl);
         game.update(input, dt);
         game.render();
@@ -228,7 +245,7 @@ fn main() {
         // HUD
         let s = game.renderer.stats;
         let speed = game.ship.velocity.length();
-        d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}"), 10, 10, 20, Color::RAYWHITE);
+        d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}", game.warp), 10, 10, 20, Color::RAYWHITE);
         d.draw_text(
             &format!(
                 "objetos: {} dibujados / {} descartados   triangulos: {} entran / {} rasterizados",
@@ -254,7 +271,7 @@ fn main() {
         );
         if show_help {
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   Tab warp   H ocultar ayuda",
                 10,
                 WINDOW_H - 28,
                 18,

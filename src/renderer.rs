@@ -43,6 +43,8 @@ pub struct Uniforms {
     pub light_pos: Vec3,
     /// Activar el mapeo de normales en los shaders que lo usan (tecla N).
     pub normal_mapping: bool,
+    /// Qué tan avanzado va el warp: 0 = vuelo normal, 1 = velocidad máxima (rayas en el cielo).
+    pub warp: f32,
 }
 
 /// Lo que recibe un fragment shader por cada píxel.

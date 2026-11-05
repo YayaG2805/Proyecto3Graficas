@@ -44,6 +44,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | L | Activar/desactivar LOD (para comparar contadores) |
 | O | Mostrar/ocultar las órbitas de los planetas |
 | N | Activar/desactivar el mapeo de normales (para comparar) |
+| Tab (mantener) | Probar el efecto visual del warp |
 | H | Mostrar/ocultar ayuda |
 
 ## Cómo funciona el pipeline (`src/renderer.rs`)
@@ -102,6 +103,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
 | Mapeo de normales | 8 | ✅ tecla N, planeta rocoso | `normal_map.rs`, `RockyShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
+| Warping animado (rúbrica) | – | 🟡 efecto visual listo (Tab); falta el viaje | `warp_streaks` en `shaders.rs`, FOV en `main.rs` |
 
 ## Uso de IA y recursos externos
 
