@@ -10,16 +10,15 @@
 //!    normal) del píxel y se pasa la normal del mapa al mundo: n = T*x + B*y + N*z.
 
 use crate::math::Vec3;
-use crate::mesh::sphere_uv;
+use crate::mesh::{sphere_dir, sphere_uv};
 use crate::noise::{fbm, perlin3};
 use crate::renderer::Fragment;
+use crate::texture::Texture;
 use std::f32::consts::PI;
 
 pub struct NormalMap {
-    width: usize,
-    height: usize,
     /// Normales en espacio tangente (ya normalizadas), una por texel.
-    data: Vec<Vec3>,
+    map: Texture,
 }
 
 impl NormalMap {
@@ -32,7 +31,7 @@ impl NormalMap {
         let mut heights = vec![0.0f32; width * height];
         for y in 0..height {
             for x in 0..width {
-                let d = uv_to_dir((x as f32 + 0.5) / width as f32, (y as f32 + 0.5) / height as f32);
+                let d = sphere_dir((x as f32 + 0.5) / width as f32, (y as f32 + 0.5) / height as f32);
                 heights[y * width + x] = terrain_height(d * frequency, seed);
             }
         }
@@ -62,24 +61,7 @@ impl NormalMap {
                 data.push(Vec3::new(-slope_u, -slope_v, 1.0).normalized());
             }
         }
-        NormalMap { width, height, data }
-    }
-
-    /// Lee el mapa en (u, v) con interpolación bilineal (mezcla los 4 texels más cercanos).
-    pub fn sample(&self, u: f32, v: f32) -> Vec3 {
-        let x = u * self.width as f32 - 0.5;
-        let y = v * self.height as f32 - 0.5;
-        let (x0, y0) = (x.floor(), y.floor());
-        let (fx, fy) = (x - x0, y - y0);
-        let texel = |x: i32, y: i32| {
-            let x = x.rem_euclid(self.width as i32) as usize;
-            let y = y.clamp(0, self.height as i32 - 1) as usize;
-            self.data[y * self.width + x]
-        };
-        let (x0, y0) = (x0 as i32, y0 as i32);
-        let top = texel(x0, y0).lerp(texel(x0 + 1, y0), fx);
-        let bottom = texel(x0, y0 + 1).lerp(texel(x0 + 1, y0 + 1), fx);
-        top.lerp(bottom, fy)
+        NormalMap { map: Texture::new(width, height, data) }
     }
 
     /// Devuelve la normal del píxel ya perturbada por el mapa (en espacio del mundo).
@@ -95,19 +77,12 @@ impl NormalMap {
 
         // uv por píxel a partir de la posición local (gira con el planeta y no tiene costura).
         let (u, v) = sphere_uv(f.local_pos.normalized());
-        let m = self.sample(u, v);
+        let m = self.map.sample(u, v); // interpolación bilineal
         let m = Vec3::new(m.x * strength, m.y * strength, m.z).normalized();
 
         // Matriz TBN: pasar de espacio tangente al mundo.
         (t * m.x + b * m.y + n * m.z).normalized()
     }
-}
-
-/// Inversa de `sphere_uv`: de (u, v) a un punto de la esfera de radio 1.
-fn uv_to_dir(u: f32, v: f32) -> Vec3 {
-    let lon = (u - 0.5) * 2.0 * PI;
-    let lat = (0.5 - v) * PI;
-    Vec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
 }
 
 /// Altura del relieve fino: rocas (fBm) menos grietas (ruido "ridged": |ruido| hace valles filosos).

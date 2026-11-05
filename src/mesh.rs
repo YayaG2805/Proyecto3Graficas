@@ -21,6 +21,13 @@ pub fn sphere_uv(d: Vec3) -> (f32, f32) {
     (u, v)
 }
 
+/// Inversa de `sphere_uv`: de (u, v) a un punto de la esfera de radio 1.
+pub fn sphere_dir(u: f32, v: f32) -> Vec3 {
+    let lon = (u - 0.5) * 2.0 * std::f32::consts::PI;
+    let lat = (0.5 - v) * std::f32::consts::PI;
+    Vec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,

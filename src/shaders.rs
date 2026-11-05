@@ -7,9 +7,11 @@
 //!   3. Usarlo al crear el planeta en `scene.rs`.
 
 use crate::math::Vec3;
+use crate::mesh::{sphere_dir, sphere_uv};
 use crate::noise::{fbm, hash01};
 use crate::normal_map::NormalMap;
 use crate::renderer::{Fragment, FragmentShader, Uniforms};
+use crate::texture::Texture;
 
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
@@ -142,37 +144,56 @@ impl FragmentShader for OrbitShader {
 // CIELO (skybox procedural): se evalúa por dirección de vista en cada píxel vacío.
 // Las estrellas están "pegadas" a la dirección, así que se ven en el horizonte y
 // giran correctamente cuando gira la cámara (pero no se acercan al moverse).
+//
+// OPTIMIZACIÓN: la nebulosa (ruido fBm, lo más caro del cielo) es suave y no cambia con el
+// tiempo, así que se calcula UNA vez al arrancar en una textura de 256x128 y en cada cuadro
+// solo se lee. Antes el cielo costaba ~3.5 ms por cuadro.
 // ---------------------------------------------------------------------------
-pub fn sky(dir: Vec3, u: &Uniforms) -> Vec3 {
-    let mut c = Vec3::new(0.005, 0.006, 0.02);
+pub struct Sky {
+    nebula: Texture,
+}
 
-    // Nebulosa tenue.
+/// Color de la nebulosa tenue en una dirección del cielo.
+fn nebula_color(dir: Vec3) -> Vec3 {
     let n = fbm(dir * 2.5, 3, 4242) * 0.5 + 0.5;
-    c += Vec3::new(0.10, 0.03, 0.16) * smoothstep(0.55, 0.85, n);
-    c += Vec3::new(0.02, 0.06, 0.12) * smoothstep(0.5, 0.8, 1.0 - n) * 0.6;
+    Vec3::new(0.10, 0.03, 0.16) * smoothstep(0.55, 0.85, n) + Vec3::new(0.02, 0.06, 0.12) * smoothstep(0.5, 0.8, 1.0 - n) * 0.6
+}
 
-    // Estrellas: dividir el espacio en celdas; algunas celdas tienen una estrella.
-    for (scale, density, seed) in [(320.0, 0.020, 11u32), (140.0, 0.010, 23u32)] {
-        let p = dir * scale;
-        let cell = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-        if hash01(cell.0, cell.1, cell.2, seed) < density {
-            let jitter = Vec3::new(
-                hash01(cell.0, cell.1, cell.2, seed + 1),
-                hash01(cell.0, cell.1, cell.2, seed + 2),
-                hash01(cell.0, cell.1, cell.2, seed + 3),
-            ) * 0.6 + Vec3::splat(0.2);
-            let star = Vec3::new(cell.0 as f32, cell.1 as f32, cell.2 as f32) + jitter;
-            let d = (p - star).length();
-            let twinkle = 0.75 + 0.25 * (u.time * 3.0 + hash01(cell.0, cell.1, cell.2, seed + 4) * 50.0).sin();
-            let b = (1.0 - d / 0.6).max(0.0).powf(1.5) * twinkle;
-            let tint = hash01(cell.0, cell.1, cell.2, seed + 5);
-            c += mix(Vec3::new(0.7, 0.8, 1.0), Vec3::new(1.0, 0.85, 0.6), tint) * b;
-        }
+impl Sky {
+    pub fn new() -> Sky {
+        Sky { nebula: Texture::from_fn(256, 128, |u, v| nebula_color(sphere_dir(u, v))) }
     }
 
-    // Resplandor alrededor del sol.
-    let to_sun = (u.light_pos - u.camera_pos).normalized();
-    let g = dir.dot(to_sun).max(0.0);
-    c += Vec3::new(1.0, 0.55, 0.15) * (g.powf(60.0) * 0.6 + g.powf(8.0) * 0.08);
-    c
+    /// Color del cielo en la dirección `dir` (se llama en cada píxel vacío).
+    pub fn color(&self, dir: Vec3, u: &Uniforms) -> Vec3 {
+        // Fondo + nebulosa leída de la textura precalculada (en vez de calcular el ruido).
+        let (tu, tv) = sphere_uv(dir);
+        let mut c = Vec3::new(0.005, 0.006, 0.02) + self.nebula.sample(tu, tv);
+
+        // Estrellas: dividir el espacio en celdas; algunas celdas tienen una estrella.
+        // Se calculan en vivo porque son baratas, finas (una textura las borraría) y titilan.
+        for (scale, density, seed) in [(320.0, 0.020, 11u32), (140.0, 0.010, 23u32)] {
+            let p = dir * scale;
+            let cell = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+            if hash01(cell.0, cell.1, cell.2, seed) < density {
+                let jitter = Vec3::new(
+                    hash01(cell.0, cell.1, cell.2, seed + 1),
+                    hash01(cell.0, cell.1, cell.2, seed + 2),
+                    hash01(cell.0, cell.1, cell.2, seed + 3),
+                ) * 0.6 + Vec3::splat(0.2);
+                let star = Vec3::new(cell.0 as f32, cell.1 as f32, cell.2 as f32) + jitter;
+                let d = (p - star).length();
+                let twinkle = 0.75 + 0.25 * (u.time * 3.0 + hash01(cell.0, cell.1, cell.2, seed + 4) * 50.0).sin();
+                let b = (1.0 - d / 0.6).max(0.0).powf(1.5) * twinkle;
+                let tint = hash01(cell.0, cell.1, cell.2, seed + 5);
+                c += mix(Vec3::new(0.7, 0.8, 1.0), Vec3::new(1.0, 0.85, 0.6), tint) * b;
+            }
+        }
+
+        // Resplandor alrededor del sol (depende de la cámara, así que también va en vivo).
+        let to_sun = (u.light_pos - u.camera_pos).normalized();
+        let g = dir.dot(to_sun).max(0.0);
+        c += Vec3::new(1.0, 0.55, 0.15) * (g.powf(60.0) * 0.6 + g.powf(8.0) * 0.08);
+        c
+    }
 }

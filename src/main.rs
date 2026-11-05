@@ -11,13 +11,14 @@ mod renderer;
 mod scene;
 mod shaders;
 mod ship;
+mod texture;
 
 use math::{Mat4, Vec3};
 use mesh::Mesh;
 use raylib::prelude::*;
 use renderer::{Renderer, Uniforms};
 use scene::Scene;
-use shaders::{sky, ShipShader};
+use shaders::{ShipShader, Sky};
 use ship::{ChaseCamera, Ship, ShipInput};
 use std::sync::Arc;
 
@@ -38,6 +39,8 @@ struct Game {
     ship: Ship,
     ship_mesh: Mesh,
     ship_shader: Arc<ShipShader>,
+    /// Cielo con la nebulosa precalculada.
+    sky: Sky,
     camera: ChaseCamera,
     time: f32,
     /// Mapeo de normales encendido (tecla N).
@@ -59,6 +62,7 @@ impl Game {
             ship,
             ship_mesh,
             ship_shader: Arc::new(ShipShader { base: Vec3::new(0.15, 0.45, 0.85) }), // Kd del material "Casco"
+            sky: Sky::new(),
             camera,
             time: 0.0,
             normal_mapping: true,
@@ -92,12 +96,23 @@ impl Game {
     }
 
     fn render(&mut self) {
+        self.draw_geometry();
+        self.shade();
+    }
+
+    /// Etapa 8: fragment shaders de cada píxel visible; los vacíos usan el cielo.
+    fn shade(&mut self) {
+        let sky = &self.sky;
+        self.renderer.finish_frame(&|dir, u| sky.color(dir, u));
+    }
+
+    /// Etapas 1 a 7 (vértices, recorte, rasterizado, z-buffer). El sombreado va aparte.
+    fn draw_geometry(&mut self) {
         let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
         self.renderer.draw_mesh(&self.ship_mesh, &model, self.ship_shader.clone());
-        self.renderer.finish_frame(&sky);
     }
 }
 
@@ -122,17 +137,26 @@ fn snapshot() {
         g.ship.yaw = (-d.x).atan2(-d.z);
         g.ship.pitch = d.y.asin();
         g.camera = ChaseCamera::new(&g.ship);
-        // Medir rendimiento: promedio de 30 cuadros.
-        let start = std::time::Instant::now();
+        // Medir rendimiento: promedio de 30 cuadros, separando geometría y sombreado.
+        let (mut geo, mut shade) = (0.0f32, 0.0f32);
         for _ in 0..30 {
-            g.render();
+            let t0 = std::time::Instant::now();
+            g.draw_geometry();
+            let t1 = std::time::Instant::now();
+            g.shade();
+            geo += (t1 - t0).as_secs_f32();
+            shade += t1.elapsed().as_secs_f32();
         }
-        let ms = start.elapsed().as_secs_f32() * 1000.0 / 30.0;
+        let (geo, shade) = (geo * 1000.0 / 30.0, shade * 1000.0 / 30.0);
         g.renderer.save_ppm(name).expect("no se pudo guardar");
         let s = g.renderer.stats;
         println!(
-            "{name}: {ms:.1} ms/cuadro  dibujados={} descartados={} tri_in={} tri_raster={}",
-            s.objects_drawn, s.objects_culled, s.triangles_in, s.triangles_rasterized
+            "{name}: {:.1} ms/cuadro (geometria {geo:.1} + sombreado {shade:.1})  dibujados={} descartados={} tri_in={} tri_raster={}",
+            geo + shade,
+            s.objects_drawn,
+            s.objects_culled,
+            s.triangles_in,
+            s.triangles_rasterized
         );
     }
 }

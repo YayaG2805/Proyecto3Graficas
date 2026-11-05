@@ -55,6 +55,11 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 5. **Rasterizado** con coordenadas baricéntricas e interpolación corregida por perspectiva.
 6. **Z-buffer** (se guarda `1/w`; más grande = más cerca) y G-buffer con los datos del fragmento ganador.
 7. **Fragment shaders** en paralelo (rayon), una vez por píxel visible (*sombreado diferido*). Los píxeles vacíos usan el shader del cielo.
+   La nebulosa del cielo (ruido caro y que no cambia) se precalcula una vez en una textura de 256x128;
+   esto bajó el sombreado de ~4.5 a ~2.8 ms por cuadro.
+
+`--snapshot` imprime el tiempo por cuadro separado en **geometría** (pasos 1–6) y **sombreado** (paso 7),
+para saber qué etapa optimizar.
 
 ## Estructura
 
@@ -67,6 +72,7 @@ src/
   shaders.rs    shaders: sol (animado), planeta rocoso, nave (Blinn-Phong), cielo de estrellas
   noise.rs      ruido de gradiente 3D + fBm con semilla
   normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
+  texture.rs    textura propia (u, v) con interpolación bilineal
   scene.rs      sol y planetas: órbitas, rotación, LODs
   ship.rs       nave (física simple, colisión) y cámara de persecución
 assets/
