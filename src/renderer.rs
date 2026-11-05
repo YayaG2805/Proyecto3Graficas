@@ -41,6 +41,8 @@ pub struct Uniforms {
     pub far: f32,
     /// El sol es la luz (luz puntual).
     pub light_pos: Vec3,
+    /// Activar el mapeo de normales en los shaders que lo usan (tecla N).
+    pub normal_mapping: bool,
 }
 
 /// Lo que recibe un fragment shader por cada píxel.
@@ -53,6 +55,8 @@ pub struct Fragment {
     /// Posición en espacio del objeto: sirve para que los patrones "giren" junto con el planeta.
     pub local_pos: Vec3,
     pub uv: (f32, f32),
+    /// Tangente en el mundo (sin normalizar). Junto con la normal forma la base TBN.
+    pub tangent: Vec3,
 }
 
 /// Un fragment shader: recibe el fragmento y devuelve un color RGB en [0, 1].
@@ -90,6 +94,7 @@ struct ClipVertex {
     normal: Vec3,
     local: Vec3,
     uv: (f32, f32),
+    tangent: Vec3,
 }
 
 impl ClipVertex {
@@ -100,6 +105,7 @@ impl ClipVertex {
             normal: self.normal.lerp(o.normal, t),
             local: self.local.lerp(o.local, t),
             uv: (self.uv.0 + (o.uv.0 - self.uv.0) * t, self.uv.1 + (o.uv.1 - self.uv.1) * t),
+            tangent: self.tangent.lerp(o.tangent, t),
         }
     }
 }
@@ -189,6 +195,8 @@ impl Renderer {
                     normal: model.transform_dir(v.normal).normalized(),
                     local: p,
                     uv: v.uv,
+                    // La tangente es una dirección, igual que la normal: gira con el objeto.
+                    tangent: model.transform_dir(v.tangent),
                 }
             })
             .collect();
@@ -226,6 +234,7 @@ impl Renderer {
             normal: Vec3::ZERO, // una línea no tiene normal
             local: p,
             uv: (dist, 0.0),
+            tangent: Vec3::ZERO,
         };
 
         let mut dist = 0.0; // distancia recorrida sobre la línea
@@ -282,6 +291,7 @@ impl Renderer {
                 normal: Vec3::ZERO,
                 local_pos: world,
                 uv: ((ua + (ub - ua) * t) * wcorr, 0.0),
+                tangent: Vec3::ZERO,
             };
         }
     }
@@ -323,6 +333,7 @@ impl Renderer {
         let (na, nb, nc) = (a.normal * iw0, b.normal * iw1, c.normal * iw2);
         let (la, lb, lc) = (a.local * iw0, b.local * iw1, c.local * iw2);
         let (ua, ub, uc) = ((a.uv.0 * iw0, a.uv.1 * iw0), (b.uv.0 * iw1, b.uv.1 * iw1), (c.uv.0 * iw2, c.uv.1 * iw2));
+        let (ta, tb, tc) = (a.tangent * iw0, b.tangent * iw1, c.tangent * iw2);
 
         for py in min_y..=max_y as usize {
             let fy = py as f32 + 0.5;
@@ -350,6 +361,7 @@ impl Renderer {
                     normal: (na * b0 + nb * b1 + nc * b2) * wcorr, // se normaliza al sombrear
                     local_pos: (la * b0 + lb * b1 + lc * b2) * wcorr,
                     uv: ((ua.0 * b0 + ub.0 * b1 + uc.0 * b2) * wcorr, (ua.1 * b0 + ub.1 * b1 + uc.1 * b2) * wcorr),
+                    tangent: (ta * b0 + tb * b1 + tc * b2) * wcorr,
                 };
             }
         }

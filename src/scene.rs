@@ -4,6 +4,7 @@
 use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
 use crate::noise::fbm;
+use crate::normal_map::NormalMap;
 use crate::renderer::{FragmentShader, Renderer};
 use crate::shaders::{OrbitShader, RockyShader, SunShader};
 use std::sync::Arc;
@@ -109,6 +110,9 @@ impl Scene {
                 low: Vec3::new(0.35, 0.22, 0.15),
                 high: Vec3::new(0.55, 0.45, 0.35),
                 peak: Vec3::new(0.9, 0.9, 0.92),
+                // Mapa de normales 512x256: frecuencia 10 (tamaño de las rocas), relieve 3% del radio.
+                normal_map: Some(NormalMap::generate(512, 256, rocky_seed + 100, 10.0, 0.03)),
+                normal_strength: 1.0,
             }),
         };
 

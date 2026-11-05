@@ -8,6 +8,7 @@
 
 use crate::math::Vec3;
 use crate::noise::{fbm, hash01};
+use crate::normal_map::NormalMap;
 use crate::renderer::{Fragment, FragmentShader, Uniforms};
 
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
@@ -65,10 +66,23 @@ pub struct RockyShader {
     pub low: Vec3,
     pub high: Vec3,
     pub peak: Vec3,
+    /// Mapa de normales opcional (relieve fino: rocas y grietas). None = superficie lisa.
+    pub normal_map: Option<NormalMap>,
+    /// Intensidad del mapa de normales (0 = sin efecto, 1 = normal, 2 = exagerado).
+    pub normal_strength: f32,
 }
 
 impl FragmentShader for RockyShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        // Mapeo de normales: cambiamos la normal del píxel ANTES de iluminar.
+        let mut f = *f;
+        if u.normal_mapping {
+            if let Some(map) = &self.normal_map {
+                f.normal = map.apply(&f, self.normal_strength);
+            }
+        }
+        let f = &f;
+
         let dir = f.local_pos.normalized();
         let h = fbm(dir * 3.0, 5, self.seed) * 0.5 + 0.5;
         let detail = fbm(dir * 25.0, 2, self.seed + 99) * 0.08; // textura fina para verse de cerca

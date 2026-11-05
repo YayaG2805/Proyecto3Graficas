@@ -6,6 +6,7 @@
 mod math;
 mod mesh;
 mod noise;
+mod normal_map;
 mod renderer;
 mod scene;
 mod shaders;
@@ -39,6 +40,8 @@ struct Game {
     ship_shader: Arc<ShipShader>,
     camera: ChaseCamera,
     time: f32,
+    /// Mapeo de normales encendido (tecla N).
+    normal_mapping: bool,
 }
 
 impl Game {
@@ -49,7 +52,7 @@ impl Game {
         });
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
-        let uniforms = Game::make_uniforms(&camera, 0.0);
+        let uniforms = Game::make_uniforms(&camera, 0.0, true);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene: Scene::new(),
@@ -58,10 +61,11 @@ impl Game {
             ship_shader: Arc::new(ShipShader { base: Vec3::new(0.15, 0.45, 0.85) }), // Kd del material "Casco"
             camera,
             time: 0.0,
+            normal_mapping: true,
         }
     }
 
-    fn make_uniforms(camera: &ChaseCamera, time: f32) -> Uniforms {
+    fn make_uniforms(camera: &ChaseCamera, time: f32, normal_mapping: bool) -> Uniforms {
         let (r, u, f) = camera.basis();
         let aspect = RENDER_W as f32 / RENDER_H as f32;
         Uniforms {
@@ -77,6 +81,7 @@ impl Game {
             near: NEAR,
             far: FAR,
             light_pos: Vec3::ZERO, // el sol está en el origen
+            normal_mapping,
         }
     }
 
@@ -87,7 +92,7 @@ impl Game {
     }
 
     fn render(&mut self) {
-        let u = Game::make_uniforms(&self.camera, self.time);
+        let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
@@ -100,12 +105,16 @@ impl Game {
 /// Sirve para probar el renderer sin abrir la ventana.
 fn snapshot() {
     let mut g = Game::new();
+    // (archivo, posición de la nave, mapeo de normales)
     let shots = [
-        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), 0.0f32),
-        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), 0.0f32),
-        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), 0.0f32),
+        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), true),
+        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), true),
+        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), true),
+        // Misma vista sin mapeo de normales, para comparar.
+        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), false),
     ];
-    for (name, pos, _) in shots {
+    for (name, pos, normal_mapping) in shots {
+        g.normal_mapping = normal_mapping;
         g.ship.position = pos;
         // Apuntar la nave hacia el planeta rocoso.
         let target = g.scene.bodies[1].position(g.time);
@@ -168,6 +177,9 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_O) {
             game.scene.show_orbits = !game.scene.show_orbits;
         }
+        if rl.is_key_pressed(KeyboardKey::KEY_N) {
+            game.normal_mapping = !game.normal_mapping;
+        }
         if rl.is_key_pressed(KeyboardKey::KEY_H) {
             show_help = !show_help;
         }
@@ -205,10 +217,11 @@ fn main() {
         );
         d.draw_text(
             &format!(
-                "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}",
+                "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}",
                 if game.renderer.frustum_culling { "ON" } else { "OFF" },
                 if game.scene.use_lod { "ON" } else { "OFF" },
-                if game.scene.show_orbits { "ON" } else { "OFF" }
+                if game.scene.show_orbits { "ON" } else { "OFF" },
+                if game.normal_mapping { "ON" } else { "OFF" }
             ),
             10,
             56,
@@ -217,7 +230,7 @@ fn main() {
         );
         if show_help {
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   H ocultar ayuda",
                 10,
                 WINDOW_H - 28,
                 18,

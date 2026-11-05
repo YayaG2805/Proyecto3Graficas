@@ -8,6 +8,17 @@ pub struct Vertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: (f32, f32),
+    /// Dirección en la que crece `u` sobre la superficie (para el mapeo de normales).
+    /// ZERO si la malla no la usa.
+    pub tangent: Vec3,
+}
+
+/// Coordenadas (u, v) de un punto de la esfera de radio 1: u = longitud, v = latitud.
+/// u va de 0 a 1 dando la vuelta; v va de 0 (polo norte) a 1 (polo sur).
+pub fn sphere_uv(d: Vec3) -> (f32, f32) {
+    let u = 0.5 + d.z.atan2(d.x) / (2.0 * std::f32::consts::PI);
+    let v = 0.5 - d.y.clamp(-1.0, 1.0).asin() / std::f32::consts::PI;
+    (u, v)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -71,7 +82,7 @@ impl Mesh {
                     Vec3::ZERO
                 };
                 let uv = if m.texcoords.len() >= 2 * (i + 1) { (m.texcoords[2 * i], m.texcoords[2 * i + 1]) } else { (0.0, 0.0) };
-                mesh.vertices.push(Vertex { position, normal, uv });
+                mesh.vertices.push(Vertex { position, normal, uv, tangent: Vec3::ZERO });
             }
             mesh.indices.extend(m.indices.iter().map(|i| i + base));
             if !has_normals {
@@ -146,9 +157,10 @@ impl Mesh {
         let vertices = dirs
             .iter()
             .map(|&d| {
-                let u = 0.5 + d.z.atan2(d.x) / (2.0 * std::f32::consts::PI);
-                let v = 0.5 - d.y.asin() / std::f32::consts::PI;
-                Vertex { position: d * displace(d), normal: d, uv: (u, v) }
+                // Tangente = derivada del punto (cos·cos, sin, cos·sin) respecto a la longitud:
+                // apunta hacia el "este", que es hacia donde crece u. En los polos vale cero.
+                let tangent = Vec3::new(-d.z, 0.0, d.x).normalized();
+                Vertex { position: d * displace(d), normal: d, uv: sphere_uv(d), tangent }
             })
             .collect();
 
@@ -189,7 +201,7 @@ pub fn flat_mesh(points: &[Vec3], tris: &[[usize; 3]]) -> Mesh {
         }
         let base = mesh.vertices.len() as u32;
         for p in [a, b, c] {
-            mesh.vertices.push(Vertex { position: p, normal: n, uv: (0.0, 0.0) });
+            mesh.vertices.push(Vertex { position: p, normal: n, uv: (0.0, 0.0), tangent: Vec3::ZERO });
         }
         mesh.indices.extend([base, base + 1, base + 2]);
     }

@@ -7,7 +7,7 @@ raylib solo se usa para abrir la ventana, leer el teclado, mostrar el framebuffe
 
 | Integrante | Parte | Archivos principales |
 |---|---|---|
-| Diego Guevara | Motor / pipeline de render, culling, LOD | `renderer.rs`, `math.rs`, `mesh.rs` |
+| Diego Guevara | Motor / pipeline de render, culling, LOD, órbitas, mapeo de normales | `renderer.rs`, `math.rs`, `mesh.rs`, `normal_map.rs` |
 | _(integrante 2)_ | Planetas, shaders, superficie | `scene.rs`, `shaders.rs`, `noise.rs` |
 | _(integrante 3)_ | Nave y navegación | `ship.rs`, `assets/nave.obj` |
 
@@ -43,6 +43,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | C | Activar/desactivar frustum culling (para comparar contadores) |
 | L | Activar/desactivar LOD (para comparar contadores) |
 | O | Mostrar/ocultar las órbitas de los planetas |
+| N | Activar/desactivar el mapeo de normales (para comparar) |
 | H | Mostrar/ocultar ayuda |
 
 ## Cómo funciona el pipeline (`src/renderer.rs`)
@@ -65,6 +66,7 @@ src/
   renderer.rs   pipeline por software (ver arriba) + contadores
   shaders.rs    shaders: sol (animado), planeta rocoso, nave (Blinn-Phong), cielo de estrellas
   noise.rs      ruido de gradiente 3D + fBm con semilla
+  normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
   scene.rs      sol y planetas: órbitas, rotación, LODs
   ship.rs       nave (física simple, colisión) y cámara de persecución
 assets/
@@ -92,7 +94,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Modo de control local para rodear un planeta | 8 | ⬜ | |
 | Atracción gravitatoria | 10 | ⬜ | |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
-| Mapeo de normales | 8 | ⬜ | |
+| Mapeo de normales | 8 | ✅ tecla N, planeta rocoso | `normal_map.rs`, `RockyShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
 
 ## Uso de IA y recursos externos
