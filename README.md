@@ -42,6 +42,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | Espacio | Frenar |
 | C | Activar/desactivar frustum culling (para comparar contadores) |
 | L | Activar/desactivar LOD (para comparar contadores) |
+| O | Mostrar/ocultar las órbitas de los planetas |
 | H | Mostrar/ocultar ayuda |
 
 ## Cómo funciona el pipeline (`src/renderer.rs`)
@@ -92,6 +93,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Atracción gravitatoria | 10 | ⬜ | |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
 | Mapeo de normales | 8 | ⬜ | |
+| Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
 
 ## Uso de IA y recursos externos
 

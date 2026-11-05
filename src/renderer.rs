@@ -9,6 +9,9 @@
 //!   6. Rasterización con coordenadas baricéntricas + interpolación corregida por perspectiva.
 //!   7. Prueba de profundidad (z-buffer). El ganador se guarda en un G-buffer.
 //!
+//! Las líneas (`draw_line_loop`, para las órbitas) usan las mismas etapas 2, 4 y 7, pero
+//! se recortan con `clip_segment` y se rasterizan con DDA en vez de baricéntricas.
+//!
 //! Al final del cuadro (`finish_frame`):
 //!   8. Etapa de fragmentos: se ejecuta el fragment shader de cada píxel visible (en paralelo).
 //!      Los píxeles vacíos usan el shader del cielo (skybox procedural).
@@ -205,6 +208,84 @@ impl Renderer {
         true
     }
 
+    /// Dibuja una línea cerrada (p. ej. una órbita) que une todos los puntos en orden.
+    /// Los puntos ya están en el mundo, así que no hay matriz de modelo: clip = P * V * p.
+    /// En `uv.0` cada píxel recibe la distancia recorrida sobre la línea (sirve para puntear).
+    pub fn draw_line_loop(&mut self, points: &[Vec3], shader: Arc<dyn FragmentShader>) {
+        if points.len() < 2 || self.shaders.len() >= u16::MAX as usize - 1 {
+            return;
+        }
+        let draw_id = self.shaders.len() as u16 + 1; // 0 = vacío
+        self.shaders.push(shader);
+
+        // --- Etapa de vértices (igual que en draw_mesh, pero sin Model) ---
+        let vp = self.uniforms.projection * self.uniforms.view;
+        let to_clip = |p: Vec3, dist: f32| ClipVertex {
+            clip: vp.transform_vec4(Vec4::new(p.x, p.y, p.z, 1.0)),
+            world: p,
+            normal: Vec3::ZERO, // una línea no tiene normal
+            local: p,
+            uv: (dist, 0.0),
+        };
+
+        let mut dist = 0.0; // distancia recorrida sobre la línea
+        for i in 0..points.len() {
+            let (pa, pb) = (points[i], points[(i + 1) % points.len()]); // el último se une con el primero
+            let seg_len = (pb - pa).length();
+            let (a, b) = (to_clip(pa, dist), to_clip(pb, dist + seg_len));
+            dist += seg_len;
+            // Recorte del segmento contra el volumen de visión (incluye el plano cercano).
+            if let Some((a, b)) = clip_segment(&a, &b) {
+                self.raster_line(&a, &b, draw_id);
+            }
+        }
+    }
+
+    /// Rasterizado de un segmento con DDA + prueba de profundidad (z-buffer).
+    fn raster_line(&mut self, a: &ClipVertex, b: &ClipVertex, draw_id: u16) {
+        let (w, h) = (self.width as f32, self.height as f32);
+
+        // División de perspectiva y viewport (mismas fórmulas que en raster_triangle).
+        let to_screen = |v: &ClipVertex| {
+            let iw = 1.0 / v.clip.w;
+            let (nx, ny) = (v.clip.x * iw, v.clip.y * iw);
+            ((nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h, iw)
+        };
+        let (x0, y0, iw0) = to_screen(a);
+        let (x1, y1, iw1) = to_screen(b);
+
+        // DDA: damos un paso por píxel en el eje donde la línea avanza más.
+        let steps = (x1 - x0).abs().max((y1 - y0).abs()).ceil().max(1.0) as usize;
+
+        // Atributos divididos por w (corrección de perspectiva, igual que en los triángulos).
+        let (wa, wb) = (a.world * iw0, b.world * iw1);
+        let (ua, ub) = (a.uv.0 * iw0, b.uv.0 * iw1);
+
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let (x, y) = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+            if x < 0.0 || y < 0.0 || x >= w || y >= h {
+                continue;
+            }
+            // 1/w es lineal en pantalla → sirve como profundidad.
+            let inv_w = iw0 + (iw1 - iw0) * t;
+            let gp = &mut self.gbuffer[y as usize * self.width + x as usize];
+            if inv_w <= gp.inv_w {
+                continue; // prueba de profundidad: un planeta o el sol está delante
+            }
+            let wcorr = 1.0 / inv_w;
+            let world = wa.lerp(wb, t) * wcorr;
+            gp.inv_w = inv_w;
+            gp.draw = draw_id;
+            gp.frag = Fragment {
+                world_pos: world,
+                normal: Vec3::ZERO,
+                local_pos: world,
+                uv: ((ua + (ub - ua) * t) * wcorr, 0.0),
+            };
+        }
+    }
+
     /// --- 4 a 7: pantalla, back-face, rasterizado y z-buffer ---
     fn raster_triangle(&mut self, a: &ClipVertex, b: &ClipVertex, c: &ClipVertex, draw_id: u16) {
         let (w, h) = (self.width as f32, self.height as f32);
@@ -327,6 +408,37 @@ fn max_scale(m: &Mat4) -> f32 {
 fn outside_same_plane(a: &Vec4, b: &Vec4, c: &Vec4) -> bool {
     let out = |f: &dyn Fn(&Vec4) -> bool| f(a) && f(b) && f(c);
     out(&|v| v.x > v.w) || out(&|v| v.x < -v.w) || out(&|v| v.y > v.w) || out(&|v| v.y < -v.w) || out(&|v| v.z < -v.w)
+}
+
+/// Recorta un segmento contra los planos del volumen de visión en espacio de clip
+/// (izquierda, derecha, abajo, arriba y cercano). Cada plano es una "distancia" que debe ser >= 0.
+/// Así nunca rasterizamos detrás de la cámara ni recorremos píxeles fuera de la pantalla.
+/// Devuelve None si el segmento queda totalmente fuera.
+fn clip_segment(a: &ClipVertex, b: &ClipVertex) -> Option<(ClipVertex, ClipVertex)> {
+    let planes: [fn(&Vec4) -> f32; 5] = [
+        |v| v.w + v.x, // izquierda: x >= -w
+        |v| v.w - v.x, // derecha:   x <= w
+        |v| v.w + v.y, // abajo:     y >= -w
+        |v| v.w - v.y, // arriba:    y <= w
+        |v| v.w + v.z, // cercano:   z >= -w
+    ];
+    // Parte visible del segmento: de t0 a t1 (0 = punto a, 1 = punto b).
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for dist in planes {
+        let (da, db) = (dist(&a.clip), dist(&b.clip));
+        if da < 0.0 && db < 0.0 {
+            return None; // los dos extremos fuera del mismo plano
+        }
+        if da < 0.0 {
+            t0 = t0.max(da / (da - db)); // a está fuera: el segmento entra en este punto
+        } else if db < 0.0 {
+            t1 = t1.min(da / (da - db)); // b está fuera: el segmento sale en este punto
+        }
+    }
+    if t0 > t1 {
+        return None;
+    }
+    Some((a.lerp(b, t0), a.lerp(b, t1)))
 }
 
 /// Sutherland–Hodgman contra un solo plano (el cercano). Un triángulo puede salir

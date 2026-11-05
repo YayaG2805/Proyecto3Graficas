@@ -5,8 +5,11 @@ use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
 use crate::noise::fbm;
 use crate::renderer::{FragmentShader, Renderer};
-use crate::shaders::{RockyShader, SunShader};
+use crate::shaders::{OrbitShader, RockyShader, SunShader};
 use std::sync::Arc;
+
+/// Cuántos segmentos de línea forman cada órbita (más = círculo más redondo).
+const ORBIT_SEGMENTS: usize = 128;
 
 pub struct Body {
     pub name: &'static str,
@@ -29,8 +32,19 @@ pub struct Body {
 impl Body {
     /// Centro del cuerpo en el tiempo `t` (órbita circular en el plano XZ).
     pub fn position(&self, t: f32) -> Vec3 {
-        let a = self.orbit_phase + self.orbit_speed * t;
+        self.orbit_point(self.orbit_phase + self.orbit_speed * t)
+    }
+
+    /// Punto de la órbita en el ángulo `a` (radianes).
+    fn orbit_point(&self, a: f32) -> Vec3 {
         Vec3::new(a.cos() * self.orbit_radius, 0.0, a.sin() * self.orbit_radius)
+    }
+
+    /// La órbita completa como puntos: la misma fórmula de `position`, dando toda la vuelta.
+    pub fn orbit_points(&self) -> Vec<Vec3> {
+        (0..ORBIT_SEGMENTS)
+            .map(|i| self.orbit_point(i as f32 / ORBIT_SEGMENTS as f32 * std::f32::consts::TAU))
+            .collect()
     }
 
     /// Model = Traslación * Inclinación * Rotación propia * Escala
@@ -60,6 +74,9 @@ pub struct Scene {
     pub bodies: Vec<Body>,
     /// Si es false se usa siempre el LOD 0 (para comparar con el contador de triángulos).
     pub use_lod: bool,
+    /// Dibujar las órbitas (tecla O).
+    pub show_orbits: bool,
+    pub orbit_shader: Arc<dyn FragmentShader>,
 }
 
 impl Scene {
@@ -96,7 +113,12 @@ impl Scene {
         };
 
         // TODO(planetas): agregar más planetas con identidad propia (ver README).
-        Scene { bodies: vec![sun, rocky], use_lod: true }
+        Scene {
+            bodies: vec![sun, rocky],
+            use_lod: true,
+            show_orbits: true,
+            orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),
+        }
     }
 
     pub fn draw(&self, r: &mut Renderer, t: f32) {
@@ -104,6 +126,12 @@ impl Scene {
         for b in &self.bodies {
             let lod = if self.use_lod { b.pick_lod(cam, t) } else { 0 };
             r.draw_mesh(&b.lods[lod], &b.model_matrix(t), b.shader.clone());
+        }
+        if self.show_orbits {
+            // El sol no orbita (radio 0), así que no tiene línea.
+            for b in self.bodies.iter().filter(|b| b.orbit_radius > 0.0) {
+                r.draw_line_loop(&b.orbit_points(), self.orbit_shader.clone());
+            }
         }
     }
 }

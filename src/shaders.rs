@@ -99,6 +99,32 @@ impl FragmentShader for ShipShader {
 }
 
 // ---------------------------------------------------------------------------
+// ÓRBITA: línea punteada cuyos puntos avanzan en la dirección en que gira el planeta.
+// uv.0 = distancia recorrida sobre la órbita (la calcula Renderer::draw_line_loop).
+// No recibe luz: es una guía visual, como en un mapa.
+// ---------------------------------------------------------------------------
+pub struct OrbitShader {
+    pub color: Vec3,
+    /// Largo de cada tramo (punto + hueco), en unidades del mundo.
+    pub dash_length: f32,
+    /// Qué tan rápido avanzan los puntos (unidades del mundo por segundo). 0 = quietos.
+    pub speed: f32,
+}
+
+impl FragmentShader for OrbitShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        // Posición dentro del tramo actual, de 0 a 1.
+        let s = ((f.uv.0 - u.time * self.speed) / self.dash_length).rem_euclid(1.0);
+        // Primera mitad del tramo = punto brillante; segunda mitad = hueco tenue.
+        let dash = if s < 0.5 { 1.0 } else { 0.2 };
+        // A lo lejos se ve más tenue para no tapar el cielo.
+        let dist = (f.world_pos - u.camera_pos).length();
+        let fade = (1.0 - dist / 250.0).clamp(0.3, 1.0);
+        self.color * dash * fade
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CIELO (skybox procedural): se evalúa por dirección de vista en cada píxel vacío.
 // Las estrellas están "pegadas" a la dirección, así que se ven en el horizonte y
 // giran correctamente cuando gira la cámara (pero no se acercan al moverse).

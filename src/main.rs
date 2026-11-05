@@ -165,6 +165,9 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_L) {
             game.scene.use_lod = !game.scene.use_lod;
         }
+        if rl.is_key_pressed(KeyboardKey::KEY_O) {
+            game.scene.show_orbits = !game.scene.show_orbits;
+        }
         if rl.is_key_pressed(KeyboardKey::KEY_H) {
             show_help = !show_help;
         }
@@ -202,9 +205,10 @@ fn main() {
         );
         d.draw_text(
             &format!(
-                "culling [C]: {}   LOD [L]: {}",
+                "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}",
                 if game.renderer.frustum_culling { "ON" } else { "OFF" },
-                if game.scene.use_lod { "ON" } else { "OFF" }
+                if game.scene.use_lod { "ON" } else { "OFF" },
+                if game.scene.show_orbits { "ON" } else { "OFF" }
             ),
             10,
             56,
@@ -213,7 +217,7 @@ fn main() {
         );
         if show_help {
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   H ocultar ayuda",
                 10,
                 WINDOW_H - 28,
                 18,
