@@ -1,0 +1,22 @@
+[package]
+name = "sistema_solar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# raylib SOLO se usa para: ventana, input, mostrar el framebuffer como textura y texto del HUD.
+# Todo el 3D (matrices, rasterizado, z-buffer, shaders) es nuestro.
+raylib = "5.5.1"
+# Lector de archivos .obj (permitido: "librerías para leer archivos").
+tobj = "4.0"
+# Paralelismo para la etapa de sombreado (fragment shaders) por filas de píxeles.
+rayon = "1.10"
+
+# El renderer por software necesita optimizaciones incluso en modo debug,
+# si no corre a 2 FPS. Para jugar usen siempre: cargo run --release
+[profile.dev]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+debug = false
