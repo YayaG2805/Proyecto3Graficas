@@ -78,10 +78,10 @@ src/
   normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
   texture.rs    textura propia (u, v) con interpolación bilineal
   scene.rs      sol y planetas: órbitas, rotación, LODs
-  ship.rs       nave (física simple, colisión) y cámara de persecución
+  ship.rs       nave (física simple, colisión), shader del Halcón y cámara de persecución
 assets/
   Halcon_Milenario.obj / .mtl / .blend   nave actual: Halcón Milenario low-poly (1680 triángulos)
-  nave.obj / nave.mtl / nave.blend   primera nave, modelada en Blender
+  nave.obj / nave.mtl / nave.blend   primera nave, modelada en Blender (respaldo si falla la carga del Halcón)
 ```
 
 ## Características del menú que solicitamos evaluar
@@ -94,7 +94,8 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Requisito: sol + nave propia + planeta que orbita y rota (con `dt`) | – | ✅ | `scene.rs`, `ship.rs` |
 | Requisito: fragment shader propio | – | ✅ | `shaders.rs` |
 | Planetas distinguibles (10 c/u, máx 5) | 50 | ✅ 5 de 5: Themyscira, Krypton, Gotham, Atlantis, Oa | `scene.rs` |
-| Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, Themyscira, Krypton, Gotham, Atlantis, Oa, nave, llama del turbo, órbita, cielo | `shaders.rs` |
+| Nave modelada por nosotros que sigue a la cámara (rúbrica) | – | ✅ Halcón | `assets/Halcon_Milenario.obj`, `Ship`, `ChaseCamera` |
+| Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, Themyscira, Krypton, Gotham, Atlantis, Oa, nave (paneles y motores), llama del turbo, órbita, cielo | `shaders.rs`, `HalconShader` en `ship.rs` |
 | Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `ExhaustShader` |
 | Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06`; Krypton: crestas ridged `1 - |fbm|`; Gotham: escalones por manzana | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |

@@ -3,7 +3,36 @@
 //! en computadoras rápidas y lentas.
 
 use crate::math::{Mat4, Vec3};
+use crate::noise::hash01;
+use crate::renderer::{Fragment, FragmentShader, Uniforms};
 use crate::scene::Scene;
+
+// --- look del halcon, estos son los numeros q se pueden mover en vivo ---
+// color base del casco, un gris metalico clarito
+const HULL_COLOR: Vec3 = Vec3 { x: 0.62, y: 0.62, z: 0.60 };
+// color de las rayitas entre paneles, mas oscuro q el casco
+const PANEL_LINE_COLOR: Vec3 = Vec3 { x: 0.16, y: 0.16, z: 0.17 };
+// tamaño de cada panel en coordenadas de la nave (la nave mide como 2.3 de largo)
+const PANEL_SIZE: f32 = 0.24;
+// grosor de la rayita, como fraccion del panel
+const PANEL_LINE_WIDTH: f32 = 0.10;
+// cuanto cambia el tono de un panel a otro pa q no se vea todo igual
+const PANEL_TONE_VARIATION: f32 = 0.22;
+// q tan cerrado es el brillo especular, mas alto = puntito mas chico
+const HULL_SHININESS: f32 = 40.0;
+// color del brillo de los motores
+const ENGINE_COLOR: Vec3 = Vec3 { x: 0.35, y: 0.65, z: 1.0 };
+// desde donde empiezan los motores en z local (la parte de atras de la nave es +z)
+const ENGINE_Z_START: f32 = 0.60;
+const ENGINE_Z_FULL: f32 = 0.78;
+// los motores son una franja angosta en y, aca va el centro y la mitad del alto
+const ENGINE_Y_CENTER: f32 = -0.033;
+const ENGINE_Y_HALF: f32 = 0.07;
+// el brillo q tienen los motores con la nave quieta y lo maximo q pueden brillar
+const ENGINE_IDLE_GLOW: f32 = 0.25;
+const ENGINE_MAX_GLOW: f32 = 1.6;
+// a esta velocidad los motores ya estan a todo
+const ENGINE_FULL_SPEED: f32 = 40.0;
 
 pub struct Ship {
     pub position: Vec3,
@@ -50,6 +79,12 @@ impl Ship {
         Mat4::from_basis(r, u, f, self.position) * Mat4::rotation_z(self.roll) * Mat4::scale(Vec3::splat(scale))
     }
 
+    /// cuanto deben brillar los motores, de 0 (quieta) a 1 (a toda velocidad o con turbo)
+    pub fn engine_glow(&self) -> f32 {
+        // el turbo prende los motores de una aunque la nave todavia no agarre velocidad
+        (self.velocity.length() / ENGINE_FULL_SPEED).max(self.boost).min(1.0)
+    }
+
     pub fn update(&mut self, input: ShipInput, dt: f32, scene: &Scene, t: f32) {
         // Giro (TODO navegación: suavizar con velocidad angular para el punto de "giro progresivo").
         let turn_rate = 1.6;
@@ -89,6 +124,60 @@ impl Ship {
                 }
             }
         }
+    }
+}
+
+// pasa de 0 a 1 suavecito entre a y b, lo uso pa q los bordes no se vean cortados
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// shader de la nave: casco gris con paneles + motores azules atras q crecen con la velocidad
+pub struct HalconShader {
+    /// viene de Ship::engine_glow, de 0 a 1
+    pub engine_glow: f32,
+}
+
+impl FragmentShader for HalconShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        // paso 1: partir la nave en cuadritos usando x y z locales
+        // uso local_pos y no world_pos pa q los paneles se muevan pegados a la nave
+        let cell_x = f.local_pos.x / PANEL_SIZE;
+        let cell_z = f.local_pos.z / PANEL_SIZE;
+
+        // paso 2: a cada cuadrito le toca un tono distinto segun su hash
+        // el hash siempre da lo mismo pa la misma celda, entonces el tono no parpadea
+        let tone = 1.0 + (hash01(cell_x.floor() as i32, 0, cell_z.floor() as i32, 31) - 0.5) * PANEL_TONE_VARIATION;
+        let plate = HULL_COLOR * tone;
+
+        // paso 3: si estamos muy cerca del borde del cuadrito pintamos la rayita oscura
+        // (cell - floor) da de 0 a 1 dentro del cuadrito, y lo comparo contra los dos lados
+        let (sx, sz) = (cell_x - cell_x.floor(), cell_z - cell_z.floor());
+        let edge = sx.min(1.0 - sx).min(sz).min(1.0 - sz);
+        let line = 1.0 - smoothstep(0.0, PANEL_LINE_WIDTH, edge);
+        let base = plate.lerp(PANEL_LINE_COLOR, line);
+
+        // paso 4: luz del sol con blinn-phong
+        // l apunta al sol, v a la camara, y h es el punto medio entre los dos
+        let l = (u.light_pos - f.world_pos).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let h = (l + v).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        let spec = f.normal.dot(h).max(0.0).powf(HULL_SHININESS);
+
+        // paso 5: un poquito de luz en el borde pa q no desaparezca del lado oscuro
+        let rim = (1.0 - f.normal.dot(v).max(0.0)).powf(3.0) * 0.25;
+        let lit = base * (0.15 + 0.85 * diff) + Vec3::splat(spec * 0.6) + Vec3::new(0.5, 0.6, 0.8) * rim;
+
+        // paso 6: los motores, solo brilla lo q este atras y en la franja de la altura de los motores
+        let back = smoothstep(ENGINE_Z_START, ENGINE_Z_FULL, f.local_pos.z);
+        let band = 1.0 - smoothstep(ENGINE_Y_HALF, ENGINE_Y_HALF * 1.6, (f.local_pos.y - ENGINE_Y_CENTER).abs());
+
+        // paso 7: entre mas rapido va la nave mas fuerte el brillo, y se suma encima de la luz
+        // no depende del sol, por eso tambien se ve del lado oscuro
+        let glow = ENGINE_IDLE_GLOW + (ENGINE_MAX_GLOW - ENGINE_IDLE_GLOW) * self.engine_glow;
+        lit + ENGINE_COLOR * (back * band * glow)
     }
 }
 

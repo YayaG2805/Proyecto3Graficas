@@ -16,10 +16,10 @@ mod texture;
 use math::{Mat4, Vec3};
 use mesh::Mesh;
 use raylib::prelude::*;
-use renderer::{Renderer, Uniforms};
+use renderer::{FragmentShader, Renderer, Uniforms};
 use scene::Scene;
 use shaders::{ExhaustShader, ShipShader, Sky};
-use ship::{ChaseCamera, Ship, ShipInput};
+use ship::{ChaseCamera, HalconShader, Ship, ShipInput};
 use std::sync::Arc;
 
 /// Resolución INTERNA del renderer (se escala a la ventana). Bajarla = más FPS.
@@ -44,6 +44,8 @@ struct Game {
     scene: Scene,
     ship: Ship,
     ship_mesh: Mesh,
+    /// true si cargo el halcon, false si estamos con el modelo de respaldo
+    ship_is_halcon: bool,
     /// Llama del turbo y el punto (en espacio de la nave) de donde sale.
     exhaust_mesh: Mesh,
     exhaust_origin: Vec3,
@@ -61,10 +63,18 @@ struct Game {
 impl Game {
     fn new() -> Game {
         // Halcón Milenario modelado en Blender. La nave anterior sigue en assets/nave.obj.
-        let ship_mesh = Mesh::load_obj("assets/Halcon_Milenario.obj", Some(1.5)).unwrap_or_else(|e| {
-            eprintln!("No se pudo cargar la nave ({e}); usando nave provisional");
-            Mesh::placeholder_ship()
-        });
+        // si no esta caemos a la nave vieja y si tampoco a la provisional
+        let (ship_mesh, ship_is_halcon) = match Mesh::load_obj("assets/Halcon_Milenario.obj", Some(1.5)) {
+            Ok(mesh) => (mesh, true),
+            Err(e) => {
+                eprintln!("No se pudo cargar el halcon ({e}); probando con nave.obj");
+                let mesh = Mesh::load_obj("assets/nave.obj", Some(1.5)).unwrap_or_else(|e| {
+                    eprintln!("No se pudo cargar la nave ({e}); usando nave provisional");
+                    Mesh::placeholder_ship()
+                });
+                (mesh, false)
+            }
+        };
         // La llama sale de la parte más trasera de la nave (local +Z = atrás): tomamos los
         // vértices que están en el último EXHAUST_ZONE del largo y medimos su ancho y alto.
         let (min_z, max_z) = ship_mesh
@@ -90,6 +100,7 @@ impl Game {
             scene: Scene::new(),
             ship,
             ship_mesh,
+            ship_is_halcon,
             exhaust_mesh,
             exhaust_origin,
             sky: Sky::new(),
@@ -147,7 +158,11 @@ impl Game {
         self.scene.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
         // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
-        let ship_shader = Arc::new(ShipShader { base: SHIP_COLOR, boost: self.ship.boost });
+        let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
+            Arc::new(HalconShader { engine_glow: self.ship.engine_glow() })
+        } else {
+            Arc::new(ShipShader { base: SHIP_COLOR, boost: self.ship.boost })
+        };
         self.renderer.draw_mesh(&self.ship_mesh, &model, ship_shader);
 
         // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
