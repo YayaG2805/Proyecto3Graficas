@@ -137,6 +137,31 @@ const ATLANTIS_REEF_PINK: Vec3 = Vec3::new(0.72, 0.36, 0.45);
 const ATLANTIS_REEF_GREEN: Vec3 = Vec3::new(0.24, 0.52, 0.34);
 const ATLANTIS_SKY: Vec3 = Vec3::new(0.45, 0.65, 0.85);
 
+// ---------------------------------------------------------------------------
+// OA: parámetros (el profe puede pedir cambiarlos en vivo).
+// ---------------------------------------------------------------------------
+/// Cuántos anillos de energía hay de polo a polo (frecuencia en la latitud).
+const OA_RINGS: f32 = 20.0;
+/// Qué tan rápido viajan los anillos de un polo al otro.
+const OA_RING_SPEED: f32 = 3.0;
+/// Qué tan delgados son los anillos (exponente: más alto = más finos).
+const OA_RING_SHARPNESS: f32 = 10.0;
+/// Velocidad de la "respiración" del brillo de borde.
+const OA_BREATH_SPEED: f32 = 1.2;
+/// Celdas de la cuadrícula de circuitos (alrededor y de polo a polo).
+const OA_GRID_U: f32 = 96.0;
+const OA_GRID_V: f32 = 48.0;
+/// Probabilidad de que una celda tenga pista horizontal / vertical.
+const OA_LINE_DENSITY: f32 = 0.5;
+/// Grosor de las pistas, en fracción de la celda.
+const OA_LINE_WIDTH: f32 = 0.08;
+/// Probabilidad de que una celda tenga un nodo (punto brillante).
+const OA_NODE_CHANCE: f32 = 0.12;
+const OA_BASE: Vec3 = Vec3::new(0.02, 0.07, 0.03);
+const OA_CIRCUIT: Vec3 = Vec3::new(0.12, 0.80, 0.28);
+const OA_RING_GLOW: Vec3 = Vec3::new(0.45, 1.0, 0.45);
+const OA_RIM: Vec3 = Vec3::new(0.25, 1.0, 0.35);
+
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
     let l = (u.light_pos - frag.world_pos).normalized();
@@ -554,6 +579,61 @@ impl FragmentShader for AtlantisShader {
         let spec = (n.dot(h).max(0.0).powf(25.0) * 0.12 + wave_n.dot(h).max(0.0).powf(ATLANTIS_SHININESS) * ATLANTIS_SPEC) * lit;
         let fresnel = (1.0 - wave_n.dot(v).max(0.0)).powf(4.0) * 0.4 * (0.2 + 0.8 * sun);
         water * (0.04 + 0.96 * diff) + Vec3::new(1.0, 0.95, 0.85) * spec + ATLANTIS_SKY * fresnel
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OA (Linterna Verde): planeta verde que pulsa con energía. Shader ANIMADO y casi todo EMISIVO.
+//
+// Técnica: patrones geométricos que dependen de la LATITUD y del ÁNGULO DE VISIÓN.
+//   - Circuitos: cuadrícula sobre sphere_uv; en cada celda un hash decide si hay pista
+//     horizontal, vertical o ninguna (así salen tramos que se cortan, no una rejilla pareja)
+//     y a veces un nodo brillante en el centro.
+//   - Anillos de energía: sin(latitud × OA_RINGS − time × OA_RING_SPEED) → bandas que viajan
+//     de un polo al otro; elevadas a una potencia quedan como anillos finos. Al pasar un
+//     anillo, los circuitos se encienden más.
+//   - Borde (fresnel) verde que "respira": su intensidad sube y baja con sin(time).
+//   - Base verde muy oscura con un Lambert suave (para notar de qué lado está el sol).
+// ---------------------------------------------------------------------------
+pub struct OaShader {
+    pub seed: u32,
+}
+
+impl FragmentShader for OaShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let dir = f.local_pos.normalized();
+        let lat = dir.y.clamp(-1.0, 1.0).asin();
+
+        // --- Anillos de energía que viajan de polo a polo ---
+        let wave = (lat * OA_RINGS - u.time * OA_RING_SPEED).sin() * 0.5 + 0.5;
+        let ring = wave.powf(OA_RING_SHARPNESS);
+
+        // --- Circuitos: pistas por celda ---
+        let (cu, cv) = sphere_uv(dir);
+        let (gu, gv) = (cu * OA_GRID_U, cv * OA_GRID_V);
+        let cell = ((gu.floor() as i32).rem_euclid(OA_GRID_U as i32), gv.floor() as i32);
+        let (x, y) = (gu - gu.floor() - 0.5, gv - gv.floor() - 0.5); // -0.5..0.5 dentro de la celda
+        let has_h = hash01(cell.0, cell.1, 1, self.seed) < OA_LINE_DENSITY;
+        let has_v = hash01(cell.0, cell.1, 2, self.seed) < OA_LINE_DENSITY;
+        let on_h = has_h && y.abs() < OA_LINE_WIDTH;
+        let on_v = has_v && x.abs() < OA_LINE_WIDTH;
+        let trace = if on_h || on_v { 1.0 } else { 0.0 };
+        // Nodo: punto redondo en el centro de algunas celdas (o donde se cruzan dos pistas).
+        let is_node = (has_h && has_v) || hash01(cell.0, cell.1, 3, self.seed) < OA_NODE_CHANCE;
+        let node = if is_node { 1.0 - smoothstep(0.12, 0.2, (x * x + y * y).sqrt()) } else { 0.0 };
+        // Cerca de los polos las celdas se aprietan: ahí se apagan los circuitos.
+        let polar = 1.0 - smoothstep(1.1, 1.35, lat.abs());
+
+        // --- Borde que respira ---
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let breath = 0.6 + 0.4 * (u.time * OA_BREATH_SPEED).sin();
+        let rim = (1.0 - f.normal.dot(v).max(0.0)).powf(3.0) * breath;
+
+        // --- Suma: base iluminada + todo lo emisivo ---
+        let l = (u.light_pos - f.world_pos).normalized();
+        let base = OA_BASE * (0.15 + 0.85 * f.normal.dot(l).max(0.0));
+        let circuits = OA_CIRCUIT * (trace * (0.35 + 1.2 * ring)) + OA_RING_GLOW * (node * (0.5 + ring));
+        base + circuits * polar + OA_RING_GLOW * (ring * 0.3) + OA_RIM * (rim * 0.9)
     }
 }
 

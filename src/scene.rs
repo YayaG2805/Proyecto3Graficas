@@ -7,8 +7,8 @@ use crate::noise::fbm;
 use crate::normal_map::NormalMap;
 use crate::renderer::{FragmentShader, Renderer};
 use crate::shaders::{
-    gotham_height, themyscira_elevation, AtlantisShader, GothamShader, KryptonShader, OrbitShader, SunShader,
-    ThemysciraShader,
+    gotham_height, themyscira_elevation, AtlantisShader, GothamShader, KryptonShader, OaShader, OrbitShader,
+    SunShader, ThemysciraShader,
 };
 use std::sync::Arc;
 
@@ -47,6 +47,12 @@ const GOTHAM_BUILDING_HEIGHT: f32 = 0.035;
 // --- Atlantis (olas, arrecifes y colores están en shaders.rs: WAVE_SPEED, WAVE_HEIGHT, WAVE_FREQ) ---
 /// Semilla del fondo marino y de los arrecifes.
 const ATLANTIS_SEED: u32 = 45;
+
+// --- Oa (anillos, circuitos y colores están en shaders.rs) ---
+/// Semilla de los circuitos y del relieve.
+const OA_SEED: u32 = 57;
+/// Relieve muy leve (fracción del radio): casi todo el efecto es del shader.
+const OA_RELIEF: f32 = 0.015;
 
 pub struct Body {
     pub name: &'static str,
@@ -207,9 +213,26 @@ impl Scene {
             shader: Arc::new(AtlantisShader { seed: ATLANTIS_SEED }),
         };
 
-        // TODO(planetas): agregar más planetas con identidad propia (ver README).
+        // OA (Linterna Verde): planeta verde que pulsa con energía.
+        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
+        //   gravity: 70.0,
+        //   info: title "Oa", hero "Linterna Verde",
+        //         fact "Es el centro del universo y la base de los Guardianes y del Cuerpo de Linternas Verdes."
+        // Deformación muy leve con ruido para que no sea una esfera perfecta.
+        let oa = Body {
+            name: "Oa",
+            radius: 4.5,
+            orbit_radius: 160.0,
+            orbit_speed: 0.022,
+            orbit_phase: 3.3, // distinta a los demás para que no queden alineados
+            spin_speed: 0.3,
+            tilt: 0.1,
+            lods: sphere_lods(&|d| 1.0 + fbm(d * 4.0, 3, OA_SEED) * OA_RELIEF),
+            shader: Arc::new(OaShader { seed: OA_SEED }),
+        };
+
         Scene {
-            bodies: vec![sun, themyscira, krypton, gotham, atlantis],
+            bodies: vec![sun, themyscira, krypton, gotham, atlantis, oa],
             use_lod: true,
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),

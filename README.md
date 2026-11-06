@@ -73,7 +73,7 @@ src/
   math.rs       Vec3, Vec4, Mat4 (traslación, rotación, escala, look_at, perspectiva)
   mesh.rs       Vertex/Mesh, carga de .obj (tobj), icosfera con subdivisión, normales
   renderer.rs   pipeline por software (ver arriba) + contadores
-  shaders.rs    shaders: sol (animado), Themyscira (biomas: agua especular / tierra con normales), Krypton (Voronoi: facetas + venas emisivas), Gotham (manzanas, río, lagos, carreteras y parques; ventanas y tráfico de noche, animado), Atlantis (olas animadas en la normal + arrecifes), nave (Blinn-Phong), llama del turbo (aditiva), cielo de estrellas
+  shaders.rs    shaders: sol (animado), Themyscira (biomas: agua especular / tierra con normales), Krypton (Voronoi: facetas + venas emisivas), Gotham (manzanas, río, lagos, carreteras y parques; ventanas y tráfico de noche, animado), Atlantis (olas animadas en la normal + arrecifes), Oa (circuitos + anillos de energía + borde que respira), nave (Blinn-Phong), llama del turbo (aditiva), cielo de estrellas
   noise.rs      ruido de gradiente 3D + fBm con semilla + Voronoi 3D (`voronoi3`)
   normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
   texture.rs    textura propia (u, v) con interpolación bilineal
@@ -93,9 +93,9 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Requisito: pipeline propio, modelo/vista/proyección, z-buffer | – | ✅ | `renderer.rs`, `math.rs` |
 | Requisito: sol + nave propia + planeta que orbita y rota (con `dt`) | – | ✅ | `scene.rs`, `ship.rs` |
 | Requisito: fragment shader propio | – | ✅ | `shaders.rs` |
-| Planetas distinguibles (10 c/u, máx 5) | 50 | 🟡 4 de 5: Themyscira, Krypton, Gotham, Atlantis | `scene.rs` |
-| Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, Themyscira, Krypton, Gotham, Atlantis, nave, llama del turbo, órbita, cielo | `shaders.rs` |
-| Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `ExhaustShader` |
+| Planetas distinguibles (10 c/u, máx 5) | 50 | ✅ 5 de 5: Themyscira, Krypton, Gotham, Atlantis, Oa | `scene.rs` |
+| Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, Themyscira, Krypton, Gotham, Atlantis, Oa, nave, llama del turbo, órbita, cielo | `shaders.rs` |
+| Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `ExhaustShader` |
 | Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06`; Krypton: crestas ridged `1 - |fbm|`; Gotham: escalones por manzana | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C | `Renderer::sphere_visible` |
