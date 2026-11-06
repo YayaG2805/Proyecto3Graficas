@@ -57,6 +57,58 @@ const KRYPTON_DEEP_BLUE: Vec3 = Vec3::new(0.04, 0.12, 0.42);
 const KRYPTON_CYAN: Vec3 = Vec3::new(0.30, 0.72, 1.00);
 const KRYPTON_VEIN_RED: Vec3 = Vec3::new(1.0, 0.12, 0.06);
 
+// ---------------------------------------------------------------------------
+// GOTHAM: parámetros (el profe puede pedir cambiarlos en vivo).
+// Paleta a propósito apagada: grises, asfalto y agua casi negra; solo las luces de noche brillan.
+// ---------------------------------------------------------------------------
+/// Manzanas alrededor del planeta (longitud) y de polo a polo (latitud).
+pub const GOTHAM_BLOCKS_U: f32 = 64.0;
+pub const GOTHAM_BLOCKS_V: f32 = 32.0;
+/// Fracción de cada manzana que es calle (se reparte en los dos bordes).
+const GOTHAM_STREET: f32 = 0.16;
+/// Cada cuántas manzanas hay una AVENIDA (calle ancha con tráfico), en cada dirección.
+const GOTHAM_AVENUE_EVERY: i32 = 6;
+/// Ancho de la avenida, en fracción de la manzana.
+const GOTHAM_AVENUE_WIDTH: f32 = 0.34;
+/// Latitud (radianes) desde la que empieza la bahía de los polos (~66°).
+pub const GOTHAM_POLAR_LIMIT: f32 = 1.15;
+/// RÍO: frecuencia (más alto = más curvas y más ríos) y ancho (en unidades de |fbm|).
+const GOTHAM_RIVER_FREQ: f32 = 1.6;
+const GOTHAM_RIVER_WIDTH: f32 = 0.018;
+/// LAGOS: frecuencia y nivel (más bajo = lagos más grandes).
+const GOTHAM_LAKE_FREQ: f32 = 2.2;
+const GOTHAM_LAKE_LEVEL: f32 = 0.24;
+/// CARRETERAS curvas: frecuencia y ancho (en unidades de |fbm|).
+const GOTHAM_HIGHWAY_FREQ: f32 = 1.1;
+const GOTHAM_HIGHWAY_WIDTH: f32 = 0.011;
+/// Probabilidad de que una manzana sea parque.
+const GOTHAM_PARK_CHANCE: f32 = 0.06;
+/// Ventanas por lado en cada azotea (4 → 4×4 ventanas).
+const GOTHAM_WINDOWS: f32 = 4.0;
+/// Fracción de ventanas encendidas (0 = ciudad apagada, 1 = todas prendidas).
+const GOTHAM_WINDOW_DENSITY: f32 = 0.45;
+/// Qué tan seguido puede cambiar cada ventana (veces por segundo). Bajo = parpadeo lento.
+const GOTHAM_FLICKER_SPEED: f32 = 0.1;
+/// Velocidad de las luces de los carros en avenidas y carreteras.
+const GOTHAM_TRAFFIC_SPEED: f32 = 1.5;
+/// Fracción de tramos de avenida/carretera con un carro (0 = vacías).
+const GOTHAM_TRAFFIC_DENSITY: f32 = 0.35;
+/// Por debajo de esta luz del sol (Lambert) se considera de noche y se encienden las luces.
+const GOTHAM_NIGHT: f32 = 0.15;
+/// Luz ambiente muy baja: la ciudad casi siempre se ve de noche.
+const GOTHAM_AMBIENT: f32 = 0.03;
+const GOTHAM_CONCRETE: Vec3 = Vec3::new(0.30, 0.30, 0.33);
+const GOTHAM_GLASS: Vec3 = Vec3::new(0.06, 0.07, 0.09);
+const GOTHAM_ASPHALT: Vec3 = Vec3::new(0.07, 0.07, 0.08);
+const GOTHAM_HIGHWAY: Vec3 = Vec3::new(0.12, 0.12, 0.13);
+const GOTHAM_LANE_LINE: Vec3 = Vec3::new(0.22, 0.20, 0.12); // ocre apagado
+const GOTHAM_PARK: Vec3 = Vec3::new(0.10, 0.13, 0.09); // verde muy oscuro y desaturado
+const GOTHAM_WATER: Vec3 = Vec3::new(0.03, 0.045, 0.06); // pizarra casi negra
+const GOTHAM_WINDOW: Vec3 = Vec3::new(0.95, 0.74, 0.36);
+const GOTHAM_STREETLAMP: Vec3 = Vec3::new(0.85, 0.45, 0.15);
+const GOTHAM_HEADLIGHT: Vec3 = Vec3::new(0.60, 0.58, 0.50);
+const GOTHAM_TAILLIGHT: Vec3 = Vec3::new(0.38, 0.07, 0.05);
+
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
     let l = (u.light_pos - frag.world_pos).normalized();
@@ -215,6 +267,186 @@ impl FragmentShader for KryptonShader {
         let vein = 1.0 - smoothstep(0.0, KRYPTON_VEIN_WIDTH, f2 - f1);
         let glow = KRYPTON_VEIN_RED * KRYPTON_VEIN_GLOW + Vec3::splat(0.6) * vein.powf(6.0); // centro casi blanco
         mix(crystal, glow, vein)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GOTHAM (Batman): planeta-ciudad oscuro. Shader ANIMADO.
+//
+// Técnica: CUADRÍCULA DE MANZANAS sobre las coordenadas (u, v) de la esfera, más capas de
+// ruido que la "rompen" para que parezca un mapa de ciudad:
+//   - La parte entera de (u·BLOCKS_U, v·BLOCKS_V) es el id de la manzana; la parte decimal
+//     dice dónde está el píxel dentro de ella: en los bordes = calle, en el centro = azotea.
+//   - RÍO y CARRETERAS: donde un fBm cruza por cero (|fbm| < ancho) sale una línea curva que
+//     recorre el planeta. LAGOS: donde otro fBm supera un nivel. Las carreteras se revisan
+//     antes que el agua, así que al cruzar un río se ven encima, como un puente.
+//   - AVENIDAS cada N manzanas y PARQUES en algunas manzanas al azar (hash).
+//   - DÍA (lado iluminado): todo con Lambert y colores apagados.
+//   - NOCHE (Lambert < GOTHAM_NIGHT): ventanas EMISIVAS encendidas al azar que cambian cada
+//     pocos segundos, faroles en calles y carreteras, y luces de carros que se MUEVEN con time.
+//   - Cerca de los polos las manzanas se aprietan (así es sphere_uv): ahí hay una bahía.
+// ---------------------------------------------------------------------------
+
+/// Qué hay en un punto de Gotham.
+#[derive(Clone, Copy, PartialEq)]
+pub enum GothamKind {
+    /// Bahía de los polos, río o lago.
+    Water,
+    /// Carretera curva. `side` = lado de la línea central (-1 o 1), para el sentido del tráfico.
+    Highway { center: bool, side: f32 },
+    /// Avenida. `along` = coordenada a lo largo de ella (para mover los carros), `side` = sentido.
+    Avenue { along: f32, side: f32 },
+    Street,
+    Park,
+    /// Azotea de un edificio.
+    Roof,
+}
+
+/// Punto de Gotham: su manzana y qué hay ahí.
+pub struct GothamCell {
+    /// (columna, fila) de la manzana: su "id".
+    pub id: (i32, i32),
+    /// Posición dentro de la manzana, de 0 a 1 en cada eje.
+    pub fu: f32,
+    pub fv: f32,
+    pub kind: GothamKind,
+}
+
+/// ¿La manzana `id` es un parque? (por hash: siempre la misma respuesta para la misma manzana)
+fn gotham_is_park(id: (i32, i32), seed: u32) -> bool {
+    hash01(id.0, id.1, 5, seed) < GOTHAM_PARK_CHANCE
+}
+
+/// Clasifica una dirección (unitaria, espacio del planeta). La usan el shader y la malla.
+pub fn gotham_cell(dir: Vec3, seed: u32) -> GothamCell {
+    let (u, v) = sphere_uv(dir);
+    let (bu, bv) = (u * GOTHAM_BLOCKS_U, v * GOTHAM_BLOCKS_V);
+    // rem_euclid: u = 1 es lo mismo que u = 0 (da la vuelta), así no hay costura.
+    let id = ((bu.floor() as i32).rem_euclid(GOTHAM_BLOCKS_U as i32), bv.floor() as i32);
+    let (fu, fv) = (bu - bu.floor(), bv - bv.floor());
+
+    // 1. Carreteras (primero: pasan por encima del agua como puentes).
+    let hw = fbm(dir * GOTHAM_HIGHWAY_FREQ, 3, seed.wrapping_add(50));
+    let kind = if hw.abs() < GOTHAM_HIGHWAY_WIDTH {
+        GothamKind::Highway { center: hw.abs() < GOTHAM_HIGHWAY_WIDTH * 0.06, side: hw.signum() }
+    }
+    // 2. Agua: bahía en los polos, río (línea curva) y lagos (manchas).
+    else if dir.y.clamp(-1.0, 1.0).asin().abs() > GOTHAM_POLAR_LIMIT
+        || fbm(dir * GOTHAM_RIVER_FREQ, 4, seed.wrapping_add(20)).abs() < GOTHAM_RIVER_WIDTH
+        || fbm(dir * GOTHAM_LAKE_FREQ, 3, seed.wrapping_add(30)) > GOTHAM_LAKE_LEVEL
+    {
+        GothamKind::Water
+    }
+    // 3. Avenidas: borde izquierdo de cada N columnas (tráfico a lo largo de v) y borde
+    //    superior de cada N filas (tráfico a lo largo de u).
+    else if id.0 % GOTHAM_AVENUE_EVERY == 0 && fu < GOTHAM_AVENUE_WIDTH {
+        GothamKind::Avenue { along: id.1 as f32 + fv, side: if fu < GOTHAM_AVENUE_WIDTH * 0.5 { -1.0 } else { 1.0 } }
+    } else if id.1 % GOTHAM_AVENUE_EVERY == 0 && fv < GOTHAM_AVENUE_WIDTH {
+        GothamKind::Avenue { along: id.0 as f32 + fu, side: if fv < GOTHAM_AVENUE_WIDTH * 0.5 { -1.0 } else { 1.0 } }
+    }
+    // 4. Calles normales en los bordes de cada manzana.
+    else if fu < GOTHAM_STREET * 0.5 || fu > 1.0 - GOTHAM_STREET * 0.5 || fv < GOTHAM_STREET * 0.5 || fv > 1.0 - GOTHAM_STREET * 0.5 {
+        GothamKind::Street
+    } else if gotham_is_park(id, seed) {
+        GothamKind::Park
+    } else {
+        GothamKind::Roof
+    };
+    GothamCell { id, fu, fv, kind }
+}
+
+/// Altura (0..1) del terreno en esa dirección. La usa scene.rs para subir la malla en
+/// escalones. hash³: la mayoría de manzanas son bajas y unas pocas son torres altas.
+/// Agua a nivel 0; carreteras y parques casi al ras.
+pub fn gotham_height(dir: Vec3, seed: u32) -> f32 {
+    let c = gotham_cell(dir, seed);
+    match c.kind {
+        GothamKind::Water => 0.0,
+        GothamKind::Highway { .. } => 0.05,
+        _ if gotham_is_park(c.id, seed) => 0.05,
+        _ => {
+            let h = hash01(c.id.0, c.id.1, 0, seed);
+            0.15 + 0.85 * h * h * h
+        }
+    }
+}
+
+/// Luces de carros que avanzan por `along` (en el sentido de `side`). Devuelve el color de la
+/// luz o negro. Cada "auto" ocupa un tramo corto; algunos tramos van vacíos (hash).
+fn gotham_traffic(along: f32, side: f32, time: f32, seed: u32) -> Vec3 {
+    // Un sentido avanza y el otro retrocede: faros blancos de frente, luces rojas de espalda.
+    let s = along * 6.0 - side * time * GOTHAM_TRAFFIC_SPEED;
+    let slot = s.floor() as i32;
+    let car = (s - s.floor()) < 0.18 && hash01(slot, side as i32, 7, seed) < GOTHAM_TRAFFIC_DENSITY;
+    if !car {
+        Vec3::ZERO
+    } else if side > 0.0 {
+        GOTHAM_HEADLIGHT
+    } else {
+        GOTHAM_TAILLIGHT
+    }
+}
+
+pub struct GothamShader {
+    pub seed: u32,
+}
+
+impl FragmentShader for GothamShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let dir = f.local_pos.normalized();
+        let c = gotham_cell(dir, self.seed);
+        let l = (u.light_pos - f.world_pos).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        let light = GOTHAM_AMBIENT + (1.0 - GOTHAM_AMBIENT) * diff;
+        // 0 = noche cerrada, 1 = día. Transición suave alrededor del umbral.
+        let night = 1.0 - smoothstep(GOTHAM_NIGHT - 0.08, GOTHAM_NIGHT + 0.08, diff);
+        let grime = 0.8 + 0.2 * fbm(dir * 40.0, 2, self.seed); // manchas de hollín
+
+        match c.kind {
+            GothamKind::Water => {
+                // Agua casi negra con un reflejo pequeño del sol (solo de día).
+                let v = (u.camera_pos - f.world_pos).normalized();
+                let spec = f.normal.dot((l + v).normalized()).max(0.0).powf(60.0) * 0.35 * (1.0 - night);
+                GOTHAM_WATER * light + Vec3::splat(spec)
+            }
+            GothamKind::Highway { center, side } => {
+                let surface = if center { GOTHAM_LANE_LINE } else { GOTHAM_HIGHWAY * grime };
+                // Coordenada "a lo largo" aproximada: otro ruido que cruza la carretera.
+                let along = fbm(dir * 3.0, 2, self.seed.wrapping_add(51)) * 40.0;
+                let lights = GOTHAM_STREETLAMP * 0.10 + gotham_traffic(along, side, u.time, self.seed);
+                surface * light + lights * night
+            }
+            GothamKind::Avenue { along, side } => {
+                let lights = GOTHAM_STREETLAMP * 0.08 + gotham_traffic(along, side, u.time, self.seed);
+                GOTHAM_ASPHALT * grime * light + lights * night
+            }
+            GothamKind::Street => GOTHAM_ASPHALT * light + GOTHAM_STREETLAMP * (0.05 * night),
+            GothamKind::Park => {
+                // Copas de árboles: manchas de ruido fino sobre verde muy oscuro.
+                let trees = 0.6 + 0.6 * (fbm(dir * 90.0, 2, self.seed.wrapping_add(9)) * 0.5 + 0.5);
+                GOTHAM_PARK * trees * light
+            }
+            GothamKind::Roof => {
+                // Coordenadas dentro de la azotea (sin la calle), de 0 a 1, y la cuadrícula de ventanas.
+                let half = GOTHAM_STREET * 0.5;
+                let ru = (c.fu - half) / (1.0 - GOTHAM_STREET);
+                let rv = (c.fv - half) / (1.0 - GOTHAM_STREET);
+                let (wx, wy) = (ru * GOTHAM_WINDOWS, rv * GOTHAM_WINDOWS);
+                // Marco: solo el centro de cada celda es vidrio (deja un borde de concreto).
+                let (cx, cy) = (wx - wx.floor(), wy - wy.floor());
+                let glass = cx > 0.2 && cx < 0.8 && cy > 0.2 && cy < 0.8;
+                let tone = hash01(c.id.0, c.id.1, 1, self.seed); // gris propio de cada manzana
+                let surface = if glass { GOTHAM_GLASS } else { GOTHAM_CONCRETE * (0.6 + 0.6 * tone) * grime };
+
+                // Ventanas encendidas: cada una "tira el dado" en momentos distintos (fase propia).
+                let wid = (c.id.0 * 16 + wx.floor() as i32, c.id.1 * 16 + wy.floor() as i32);
+                let phase = hash01(wid.0, wid.1, 2, self.seed) * 10.0;
+                let epoch = (u.time * GOTHAM_FLICKER_SPEED + phase).floor() as i32;
+                let on = glass && hash01(wid.0, wid.1, epoch, self.seed.wrapping_add(3)) < GOTHAM_WINDOW_DENSITY;
+                let emit = if on { GOTHAM_WINDOW * (0.6 + 0.4 * hash01(wid.0, wid.1, 4, self.seed)) } else { Vec3::ZERO };
+                surface * light + emit * night
+            }
+        }
     }
 }
 

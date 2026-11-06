@@ -6,7 +6,9 @@ use crate::mesh::Mesh;
 use crate::noise::fbm;
 use crate::normal_map::NormalMap;
 use crate::renderer::{FragmentShader, Renderer};
-use crate::shaders::{themyscira_elevation, KryptonShader, OrbitShader, SunShader, ThemysciraShader};
+use crate::shaders::{
+    gotham_height, themyscira_elevation, GothamShader, KryptonShader, OrbitShader, SunShader, ThemysciraShader,
+};
 use std::sync::Arc;
 
 /// Cuántos segmentos de línea forman cada órbita (más = círculo más redondo).
@@ -34,6 +36,12 @@ fn krypton_ridge(dir: Vec3) -> f32 {
     let ridge = (1.0 - fbm(dir * KRYPTON_RIDGE_FREQ, 4, KRYPTON_SEED).abs() * 2.0).max(0.0);
     ridge.powf(KRYPTON_RIDGE_SHARPNESS)
 }
+
+// --- Gotham (manzanas, ventanas y colores están en shaders.rs) ---
+/// Semilla de la ciudad: cambiarla cambia alturas, tonos y ventanas.
+const GOTHAM_SEED: u32 = 33;
+/// Altura de la torre más alta, en fracción del radio (0.035 = 3.5%).
+const GOTHAM_BUILDING_HEIGHT: f32 = 0.035;
 
 pub struct Body {
     pub name: &'static str,
@@ -158,9 +166,27 @@ impl Scene {
             shader: Arc::new(KryptonShader { seed: KRYPTON_SEED }),
         };
 
+        // GOTHAM (Batman): planeta-ciudad oscuro, casi siempre de noche.
+        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
+        //   gravity: 100.0,
+        //   info: title "Gotham", hero "Batman",
+        //         fact "Bruce Wayne patrulla de noche; de día es el dueño de Industrias Wayne."
+        // Deformación EN ESCALÓN: cada manzana sube a su propia altura, como edificios.
+        let gotham = Body {
+            name: "Gotham",
+            radius: 5.5,
+            orbit_radius: 100.0,
+            orbit_speed: 0.035,
+            orbit_phase: 4.4, // distinta a los demás para que no queden alineados
+            spin_speed: 0.12,
+            tilt: 0.2,
+            lods: sphere_lods(&|d| 1.0 + gotham_height(d, GOTHAM_SEED) * GOTHAM_BUILDING_HEIGHT),
+            shader: Arc::new(GothamShader { seed: GOTHAM_SEED }),
+        };
+
         // TODO(planetas): agregar más planetas con identidad propia (ver README).
         Scene {
-            bodies: vec![sun, themyscira, krypton],
+            bodies: vec![sun, themyscira, krypton, gotham],
             use_lod: true,
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),
