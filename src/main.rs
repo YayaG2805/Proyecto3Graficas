@@ -360,15 +360,24 @@ fn snapshot() {
     // Cometa visto de lado, para que se note que la cola apunta lejos del sol.
     g.time = 0.0;
     g.ship.boost = 0.0;
-    // Superman dando vueltas alrededor de Krypton, con su estela.
-    if let Some(sup) = g.creatures.iter().find(|c| c.name == "Superman") {
-        let hero = sup.position(&g.scene, g.time);
-        let planet = g.scene.body_position(sup.home, g.time);
+    // Un retrato de cada personaje de la Liga: la cámara se pone a mano cerca de él (algunos son
+    // muy pequeños para la cámara de persecución) y la nave se manda detrás de la cámara.
+    for i in 0..g.creatures.len() {
+        let (name, hero, planet, size) = {
+            let c = &g.creatures[i];
+            (c.name, c.position(&g.scene, g.time), g.scene.body_position(c.home, g.time), c.size)
+        };
         let out = (hero - planet).normalized();
-        aim_ship_at(&mut g, hero + out * 9.0 + Vec3::UP * 3.0, (hero + planet) * 0.5);
+        let side = out.cross(Vec3::UP).normalized();
+        let eye = hero + (out * 0.6 + side * 0.8 + Vec3::UP * 0.3) * (size * 8.0);
+        g.ship.position = eye + (eye - hero).normalized() * 30.0;
+        g.camera.position = eye;
+        g.camera.target = hero;
+        g.camera.up = Vec3::UP;
         g.render();
-        g.renderer.save_ppm("snap_superman.ppm").expect("no se pudo guardar");
-        println!("snap_superman.ppm: listo");
+        let file = format!("snap_{}.ppm", name.to_lowercase().replace(' ', "_"));
+        g.renderer.save_ppm(&file).expect("no se pudo guardar");
+        println!("{file}: listo");
     }
 
     let comet = g.comet.position(g.time);
