@@ -36,6 +36,8 @@ const RENDER_W: usize = 640;
 const RENDER_H: usize = 360;
 const WINDOW_W: i32 = 1280;
 const WINDOW_H: i32 = 720;
+/// Arrancar en pantalla completa (sin bordes, a la resolución del monitor). F11 la quita o la pone.
+const START_FULLSCREEN: bool = true;
 
 const FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
 /// Cuánto se abre el campo de visión con el warp al máximo (sensación de velocidad).
@@ -477,8 +479,19 @@ fn main() {
         return;
     }
 
-    let (mut rl, thread) = raylib::init().size(WINDOW_W, WINDOW_H).title("Sistema Solar - Software Renderer").build();
+    let (mut rl, thread) =
+        raylib::init().size(WINDOW_W, WINDOW_H).resizable().title("Sistema Solar - Software Renderer").build();
     rl.set_target_fps(60);
+
+    // PANTALLA COMPLETA: todo (juego + HUD) se dibuja en un lienzo fijo de WINDOW_W×WINDOW_H y al
+    // final ese lienzo se escala para llenar la pantalla sin deformarse (franjas negras si el
+    // monitor no es 16:9). Así el HUD queda igual en ventana y en pantalla completa.
+    let mut canvas = rl
+        .load_render_texture(&thread, WINDOW_W as u32, WINDOW_H as u32)
+        .expect("no se pudo crear el lienzo");
+    if START_FULLSCREEN {
+        rl.toggle_borderless_windowed();
+    }
 
     let mut game = Game::new();
 
@@ -506,6 +519,9 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_H) {
             show_help = !show_help;
         }
+        if rl.is_key_pressed(KeyboardKey::KEY_F11) {
+            rl.toggle_borderless_windowed();
+        }
 
         let input = read_input(&rl);
         game.update(input, dt);
@@ -513,116 +529,135 @@ fn main() {
         texture.update_texture(&game.renderer.color).expect("no se pudo actualizar la textura");
 
         let fps = rl.get_fps();
-        let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::BLACK);
-        d.draw_texture_pro(
-            &texture,
-            Rectangle::new(0.0, 0.0, RENDER_W as f32, RENDER_H as f32),
-            Rectangle::new(0.0, 0.0, WINDOW_W as f32, WINDOW_H as f32),
+        let (screen_w, screen_h) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        let mut frame = rl.begin_drawing(&thread);
+        {
+            // Todo lo de este bloque se dibuja en el lienzo de WINDOW_W×WINDOW_H, no en la pantalla.
+            let mut d = frame.begin_texture_mode(&thread, &mut canvas);
+            d.clear_background(Color::BLACK);
+            d.draw_texture_pro(
+                &texture,
+                Rectangle::new(0.0, 0.0, RENDER_W as f32, RENDER_H as f32),
+                Rectangle::new(0.0, 0.0, WINDOW_W as f32, WINDOW_H as f32),
+                Vector2::zero(),
+                0.0,
+                Color::WHITE,
+            );
+
+            // HUD
+            let s = game.renderer.stats;
+            let speed = game.ship.velocity.length();
+            // en orbita muestra el mundo, si no avisa si ya estamos lo bastante cerca pa apretar la f
+            let orbit_text = match game.state.orbit_lock {
+                Some(i) => game.scene.bodies[i].name,
+                None if interaction::orbit_in_range(&game.state, &game.scene) => "disponible",
+                None => "lejos",
+            };
+            d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}   orbita [F]: {orbit_text}", game.warp), 10, 10, 20, Color::RAYWHITE);
+            d.draw_text(
+                &format!(
+                    "objetos: {} dibujados / {} descartados   triangulos: {} entran / {} rasterizados",
+                    s.objects_drawn, s.objects_culled, s.triangles_in, s.triangles_rasterized
+                ),
+                10,
+                34,
+                18,
+                Color::LIGHTGRAY,
+            );
+            d.draw_text(
+                &format!(
+                    "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}",
+                    if game.renderer.frustum_culling { "ON" } else { "OFF" },
+                    if game.renderer.use_lod { "ON" } else { "OFF" },
+                    if game.scene.show_orbits { "ON" } else { "OFF" },
+                    if game.normal_mapping { "ON" } else { "OFF" },
+                    if game.ship.gravity_on { "ON" } else { "OFF" }
+                ),
+                10,
+                56,
+                18,
+                Color::LIGHTGRAY,
+            );
+            // El destino del warp, si ya vamos viajando y los coleccionables
+            // (el total lo llena interaction.rs cuando haya cristales).
+            let target = game.scene.bodies[game.state.warp_target].name;
+            let crystals = if game.state.total > 0 {
+                format!("{}/{}", game.state.collected, game.state.total)
+            } else {
+                "-".to_string()
+            };
+            d.draw_text(
+                &format!(
+                    "destino [1-5]: {target}   warp [Tab]: {}   cristales: {crystals}",
+                    if game.ship.warping() { "viajando" } else { "listo" }
+                ),
+                10,
+                78,
+                18,
+                Color::SKYBLUE,
+            );
+
+            // Aviso para escanear cuando hay un mundo cerca y su ficha no está abierta.
+            if let Some(i) = game.state.nearest {
+                let b = &game.scene.bodies[i];
+                if game.card_body.is_none() && game.state.nearest_dist < SCAN_HINT_RADII * b.radius {
+                    d.draw_text(&format!("[E] escanear {}", hud::to_ascii(b.name)), 10, 102, 20, Color::GOLD);
+                }
+            }
+
+            // Ficha del planeta escaneado (el fondo ya lo pintó draw_overlay en el framebuffer).
+            if let Some(i) = game.card_body {
+                let b = &game.scene.bodies[i];
+                let (x, mut y) = (CARD_X0 * HUD_SCALE + 14, CARD_Y0 * HUD_SCALE + 12);
+                d.draw_text(&hud::to_ascii(b.info.title), x, y, 24, Color::RAYWHITE);
+                y += 30;
+                d.draw_text(&format!("Heroe: {}", hud::to_ascii(b.info.hero)), x, y, 18, Color::GOLD);
+                y += 28;
+                for line in hud::wrap(&hud::to_ascii(b.info.fact), CARD_WRAP) {
+                    d.draw_text(&line, x, y, 16, Color::LIGHTGRAY);
+                    y += 20;
+                }
+                d.draw_text(
+                    &format!("radio: {:.1}   gravedad: {:.0}", b.radius, b.gravity),
+                    x,
+                    CARD_Y1 * HUD_SCALE - 30,
+                    18,
+                    Color::SKYBLUE,
+                );
+            }
+
+            if show_help {
+                // son dos lineas porque en una ya no cabia en la ventana
+                d.draw_text(
+                    "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear",
+                    10,
+                    WINDOW_H - 48,
+                    16,
+                    Color::GOLD,
+                );
+                d.draw_text(
+                    "1-5 destino   Tab warp (otro Tab cancela)   G gravedad   P foto   C culling   L LOD   O orbitas   N normales   H ayuda   F11 pantalla",
+                    10,
+                    WINDOW_H - 26,
+                    16,
+                    Color::GOLD,
+                );
+            }
+        }
+
+        // El lienzo se escala lo más grande que quepa en la pantalla, centrado y sin deformarse.
+        let scale = (screen_w / WINDOW_W as f32).min(screen_h / WINDOW_H as f32);
+        let (w, h) = (WINDOW_W as f32 * scale, WINDOW_H as f32 * scale);
+        frame.clear_background(Color::BLACK);
+        frame.draw_texture_pro(
+            &canvas,
+            // alto negativo: las texturas de dibujo de OpenGL quedan de cabeza, así se voltean
+            Rectangle::new(0.0, 0.0, WINDOW_W as f32, -(WINDOW_H as f32)),
+            Rectangle::new((screen_w - w) * 0.5, (screen_h - h) * 0.5, w, h),
             Vector2::zero(),
             0.0,
             Color::WHITE,
         );
-
-        // HUD
-        let s = game.renderer.stats;
-        let speed = game.ship.velocity.length();
-        // en orbita muestra el mundo, si no avisa si ya estamos lo bastante cerca pa apretar la f
-        let orbit_text = match game.state.orbit_lock {
-            Some(i) => game.scene.bodies[i].name,
-            None if interaction::orbit_in_range(&game.state, &game.scene) => "disponible",
-            None => "lejos",
-        };
-        d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}   orbita [F]: {orbit_text}", game.warp), 10, 10, 20, Color::RAYWHITE);
-        d.draw_text(
-            &format!(
-                "objetos: {} dibujados / {} descartados   triangulos: {} entran / {} rasterizados",
-                s.objects_drawn, s.objects_culled, s.triangles_in, s.triangles_rasterized
-            ),
-            10,
-            34,
-            18,
-            Color::LIGHTGRAY,
-        );
-        d.draw_text(
-            &format!(
-                "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}",
-                if game.renderer.frustum_culling { "ON" } else { "OFF" },
-                if game.renderer.use_lod { "ON" } else { "OFF" },
-                if game.scene.show_orbits { "ON" } else { "OFF" },
-                if game.normal_mapping { "ON" } else { "OFF" },
-                if game.ship.gravity_on { "ON" } else { "OFF" }
-            ),
-            10,
-            56,
-            18,
-            Color::LIGHTGRAY,
-        );
-        // El destino del warp, si ya vamos viajando y los coleccionables
-        // (el total lo llena interaction.rs cuando haya cristales).
-        let target = game.scene.bodies[game.state.warp_target].name;
-        let crystals = if game.state.total > 0 {
-            format!("{}/{}", game.state.collected, game.state.total)
-        } else {
-            "-".to_string()
-        };
-        d.draw_text(
-            &format!(
-                "destino [1-5]: {target}   warp [Tab]: {}   cristales: {crystals}",
-                if game.ship.warping() { "viajando" } else { "listo" }
-            ),
-            10,
-            78,
-            18,
-            Color::SKYBLUE,
-        );
-
-        // Aviso para escanear cuando hay un mundo cerca y su ficha no está abierta.
-        if let Some(i) = game.state.nearest {
-            let b = &game.scene.bodies[i];
-            if game.card_body.is_none() && game.state.nearest_dist < SCAN_HINT_RADII * b.radius {
-                d.draw_text(&format!("[E] escanear {}", hud::to_ascii(b.name)), 10, 102, 20, Color::GOLD);
-            }
-        }
-
-        // Ficha del planeta escaneado (el fondo ya lo pintó draw_overlay en el framebuffer).
-        if let Some(i) = game.card_body {
-            let b = &game.scene.bodies[i];
-            let (x, mut y) = (CARD_X0 * HUD_SCALE + 14, CARD_Y0 * HUD_SCALE + 12);
-            d.draw_text(&hud::to_ascii(b.info.title), x, y, 24, Color::RAYWHITE);
-            y += 30;
-            d.draw_text(&format!("Heroe: {}", hud::to_ascii(b.info.hero)), x, y, 18, Color::GOLD);
-            y += 28;
-            for line in hud::wrap(&hud::to_ascii(b.info.fact), CARD_WRAP) {
-                d.draw_text(&line, x, y, 16, Color::LIGHTGRAY);
-                y += 20;
-            }
-            d.draw_text(
-                &format!("radio: {:.1}   gravedad: {:.0}", b.radius, b.gravity),
-                x,
-                CARD_Y1 * HUD_SCALE - 30,
-                18,
-                Color::SKYBLUE,
-            );
-        }
-
-        if show_help {
-            // son dos lineas porque en una ya no cabia en la ventana
-            d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear",
-                10,
-                WINDOW_H - 48,
-                16,
-                Color::GOLD,
-            );
-            d.draw_text(
-                "1-5 destino   Tab warp (otro Tab cancela)   G gravedad   P foto   C culling   L LOD   O orbitas   N normales   H ayuda",
-                10,
-                WINDOW_H - 26,
-                16,
-                Color::GOLD,
-            );
-        }
     }
 }
 

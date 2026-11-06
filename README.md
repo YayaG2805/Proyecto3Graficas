@@ -51,6 +51,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | G | Activar/desactivar la gravedad de los planetas y el sol |
 | E | Escanear el mundo cercano (el HUD avisa cuando se puede): abre su ficha por 6 s |
 | H | Mostrar/ocultar ayuda |
+| F11 | Pantalla completa / ventana (arranca en pantalla completa) |
 
 ## Cómo funciona el pipeline (`src/renderer.rs`)
 
