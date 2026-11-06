@@ -109,6 +109,34 @@ const GOTHAM_STREETLAMP: Vec3 = Vec3::new(0.85, 0.45, 0.15);
 const GOTHAM_HEADLIGHT: Vec3 = Vec3::new(0.60, 0.58, 0.50);
 const GOTHAM_TAILLIGHT: Vec3 = Vec3::new(0.38, 0.07, 0.05);
 
+// ---------------------------------------------------------------------------
+// ATLANTIS: parámetros (el profe puede pedir cambiarlos en vivo).
+// ---------------------------------------------------------------------------
+/// Qué tan rápido avanzan las olas.
+pub const WAVE_SPEED: f32 = 1.0;
+/// Qué tan altas se "sienten" las olas (cuánto inclinan la normal). 0 = mar plano.
+pub const WAVE_HEIGHT: f32 = 0.006;
+/// Cuántas olas caben alrededor del planeta (más alto = olas más cortas y numerosas).
+pub const WAVE_FREQ: f32 = 40.0;
+/// Las 3 ondas: (dirección, multiplicador de frecuencia, multiplicador de velocidad, amplitud).
+const ATLANTIS_WAVES: [(Vec3, f32, f32, f32); 3] = [
+    (Vec3::new(0.94, 0.19, 0.28), 1.0, 1.0, 0.5),
+    (Vec3::new(-0.40, 0.91, 0.10), 1.7, 1.3, 0.3),
+    (Vec3::new(0.19, -0.29, 0.94), 2.6, 0.8, 0.2),
+];
+/// Desde qué altura del fondo marino (fBm) aparecen arrecifes. Más bajo = más arrecifes.
+const ATLANTIS_REEF_LEVEL: f32 = 0.20;
+/// Brillo del sol en las olas (Blinn-Phong): intensidad y dureza.
+const ATLANTIS_SPEC: f32 = 1.0;
+const ATLANTIS_SHININESS: f32 = 220.0;
+/// Cuánto doblan el fBm los frentes de ola (radianes de fase). 0 = olas rectas y repetidas.
+const ATLANTIS_WAVE_WARP: f32 = 7.0;
+const ATLANTIS_DEEP: Vec3 = Vec3::new(0.01, 0.06, 0.20);
+const ATLANTIS_SHALLOW: Vec3 = Vec3::new(0.05, 0.45, 0.55);
+const ATLANTIS_REEF_PINK: Vec3 = Vec3::new(0.72, 0.36, 0.45);
+const ATLANTIS_REEF_GREEN: Vec3 = Vec3::new(0.24, 0.52, 0.34);
+const ATLANTIS_SKY: Vec3 = Vec3::new(0.45, 0.65, 0.85);
+
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
     let l = (u.light_pos - frag.world_pos).normalized();
@@ -447,6 +475,85 @@ impl FragmentShader for GothamShader {
                 surface * light + emit * night
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ATLANTIS (Aquaman): océano con olas en movimiento y arrecifes. Shader ANIMADO.
+//
+// Técnica: la malla es una esfera LISA; las olas están en la NORMAL.
+//   1. Altura de las olas = suma de 3 ondas senoidales que avanzan en direcciones distintas:
+//        h = Σ aᵢ · sin(dir·kᵢ · WAVE_FREQ · fᵢ + warp − time · WAVE_SPEED · sᵢ)
+//      `warp` es un fBm suave que DOBLA los frentes de ola (si no, 3 ondas rectas cruzadas se
+//      ven como una cuadrícula), y otro fBm lento cambia la amplitud de un lugar a otro.
+//   2. Su GRADIENTE (derivada) dice hacia dónde sube la ola. Se proyecta en el plano tangente
+//      y se inclina la normal en contra: n = normalize(N − (T·gt + B·gb) · WAVE_HEIGHT).
+//      Es la misma base TBN del mapeo de normales, pero con ondas que se mueven con time.
+//   3. Color por profundidad (ruido de "fondo marino"): azul marino → turquesa, y arrecifes
+//      rosados/verdes donde el fondo está más alto.
+//   4. Luz: Lambert + Blinn-Phong con la normal de las olas → el reflejo del sol brilla y se
+//      mueve; borde (fresnel) con el color del cielo, como el agua vista de lado.
+// ---------------------------------------------------------------------------
+pub struct AtlantisShader {
+    pub seed: u32,
+}
+
+impl FragmentShader for AtlantisShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let dir = f.local_pos.normalized();
+
+        // --- 1 y 2. Olas: altura y gradiente (en espacio del planeta) ---
+        // El fBm se desplaza despacio con el tiempo: zonas de mar más picado y más calmado.
+        let choppy = 0.7 + 0.6 * (fbm(dir * 4.0 + Vec3::splat(u.time * 0.05), 2, self.seed.wrapping_add(40)) * 0.5 + 0.5);
+        let warp = fbm(dir * 3.0, 2, self.seed.wrapping_add(42)) * ATLANTIS_WAVE_WARP;
+        let mut height = 0.0;
+        let mut grad = Vec3::ZERO;
+        for (k, fk, sk, a) in ATLANTIS_WAVES {
+            let freq = WAVE_FREQ * fk;
+            // (El warp cambia despacio en el espacio, así que su derivada se ignora: es pequeña.)
+            let phase = dir.dot(k) * freq + warp * fk - u.time * WAVE_SPEED * sk;
+            height += a * phase.sin();
+            grad += k * (a * phase.cos() * freq); // derivada de a·sin(dir·k·freq) respecto a dir
+        }
+        let grad = grad * choppy;
+
+        // Base tangente local (igual a la tangente de la icosfera) y la misma en el mundo.
+        let n = f.normal;
+        let t_world = (f.tangent - n * n.dot(f.tangent)).normalized();
+        let wave_n = if t_world == Vec3::ZERO {
+            n // en los polos no hay "este": sin olas
+        } else {
+            let t_local = Vec3::new(-dir.z, 0.0, dir.x).normalized();
+            let b_local = dir.cross(t_local);
+            let (gt, gb) = (grad.dot(t_local), grad.dot(b_local)); // gradiente en el plano tangente
+            (n - (t_world * gt + n.cross(t_world) * gb) * WAVE_HEIGHT).normalized()
+        };
+
+        // --- 3. Color: profundidad y arrecifes ---
+        let seabed = fbm(dir * 2.5, 4, self.seed); // "altura" del fondo marino (fija)
+        let mut water = mix(ATLANTIS_DEEP, ATLANTIS_SHALLOW, smoothstep(-0.05, 0.25, seabed));
+        let reef = smoothstep(ATLANTIS_REEF_LEVEL, ATLANTIS_REEF_LEVEL + 0.05, seabed);
+        if reef > 0.0 {
+            let pink_or_green = fbm(dir * 25.0, 2, self.seed.wrapping_add(41)) * 0.5 + 0.5;
+            let coral = mix(ATLANTIS_REEF_GREEN, ATLANTIS_REEF_PINK, smoothstep(0.4, 0.6, pink_or_green));
+            water = mix(water, coral, reef * 0.6); // se ve a través del agua: no del todo
+        }
+        // Espuma suave en las crestas más altas.
+        let crest = smoothstep(0.65, 1.0, height * choppy);
+        water = mix(water, Vec3::splat(0.75), crest * 0.18);
+
+        // --- 4. Luz ---
+        let l = (u.light_pos - f.world_pos).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let h = (l + v).normalized();
+        let sun = n.dot(l).max(0.0); // lado iluminado (con la normal lisa)
+        let diff = wave_n.dot(l).max(0.0);
+        // Dos brillos: uno amplio con la normal lisa (el "camino" del sol en el mar) y destellos
+        // pequeños y muy duros con la normal de las olas (se mueven con ellas).
+        let lit = smoothstep(0.0, 0.1, sun);
+        let spec = (n.dot(h).max(0.0).powf(25.0) * 0.12 + wave_n.dot(h).max(0.0).powf(ATLANTIS_SHININESS) * ATLANTIS_SPEC) * lit;
+        let fresnel = (1.0 - wave_n.dot(v).max(0.0)).powf(4.0) * 0.4 * (0.2 + 0.8 * sun);
+        water * (0.04 + 0.96 * diff) + Vec3::new(1.0, 0.95, 0.85) * spec + ATLANTIS_SKY * fresnel
     }
 }
 

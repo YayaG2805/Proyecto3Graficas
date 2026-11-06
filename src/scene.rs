@@ -7,7 +7,8 @@ use crate::noise::fbm;
 use crate::normal_map::NormalMap;
 use crate::renderer::{FragmentShader, Renderer};
 use crate::shaders::{
-    gotham_height, themyscira_elevation, GothamShader, KryptonShader, OrbitShader, SunShader, ThemysciraShader,
+    gotham_height, themyscira_elevation, AtlantisShader, GothamShader, KryptonShader, OrbitShader, SunShader,
+    ThemysciraShader,
 };
 use std::sync::Arc;
 
@@ -42,6 +43,10 @@ fn krypton_ridge(dir: Vec3) -> f32 {
 const GOTHAM_SEED: u32 = 33;
 /// Altura de la torre más alta, en fracción del radio (0.035 = 3.5%).
 const GOTHAM_BUILDING_HEIGHT: f32 = 0.035;
+
+// --- Atlantis (olas, arrecifes y colores están en shaders.rs: WAVE_SPEED, WAVE_HEIGHT, WAVE_FREQ) ---
+/// Semilla del fondo marino y de los arrecifes.
+const ATLANTIS_SEED: u32 = 45;
 
 pub struct Body {
     pub name: &'static str,
@@ -184,9 +189,27 @@ impl Scene {
             shader: Arc::new(GothamShader { seed: GOTHAM_SEED }),
         };
 
+        // ATLANTIS (Aquaman): océano con olas en movimiento y arrecifes.
+        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
+        //   gravity: 110.0,
+        //   info: title "Atlantis", hero "Aquaman",
+        //         fact "Arthur Curry puede hablar con la vida marina y es rey de los siete mares."
+        // SIN deformación: la superficie del mar es lisa; las olas están en el shader (en la normal).
+        let atlantis = Body {
+            name: "Atlantis",
+            radius: 6.0,
+            orbit_radius: 130.0,
+            orbit_speed: 0.028,
+            orbit_phase: 0.9, // distinta a los demás para que no queden alineados
+            spin_speed: 0.1,
+            tilt: 0.25,
+            lods: sphere_lods(&|_| 1.0),
+            shader: Arc::new(AtlantisShader { seed: ATLANTIS_SEED }),
+        };
+
         // TODO(planetas): agregar más planetas con identidad propia (ver README).
         Scene {
-            bodies: vec![sun, themyscira, krypton, gotham],
+            bodies: vec![sun, themyscira, krypton, gotham, atlantis],
             use_lod: true,
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),
