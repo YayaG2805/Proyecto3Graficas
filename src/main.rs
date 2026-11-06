@@ -3,6 +3,7 @@
 //! raylib SOLO se usa para la ventana, leer teclado/mouse, mostrar nuestro framebuffer
 //! como textura 2D y escribir texto del HUD. Todo el 3D lo hace `renderer.rs`.
 
+mod exotics;
 mod hud;
 mod interaction;
 mod math;
@@ -16,6 +17,7 @@ mod shaders;
 mod ship;
 mod texture;
 
+use exotics::{AsteroidBelt, ASTEROID_SEED};
 use hud::{Canvas, RadarBlip};
 use interaction::GameState;
 use math::{Mat4, Vec3};
@@ -78,6 +80,8 @@ fn body_color(name: &str) -> Vec3 {
 struct Game {
     renderer: Renderer,
     scene: Scene,
+    /// Cinturón de asteroides entre Krypton y Gotham (exotics.rs).
+    asteroids: AsteroidBelt,
     ship: Ship,
     ship_mesh: Mesh,
     /// true si cargo el halcon, false si estamos con el modelo de respaldo
@@ -138,6 +142,7 @@ impl Game {
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene: Scene::new(),
+            asteroids: AsteroidBelt::new(ASTEROID_SEED),
             ship,
             ship_mesh,
             ship_is_halcon,
@@ -251,6 +256,7 @@ impl Game {
         let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp, self.ship.position);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
+        self.asteroids.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
         // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
         let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
@@ -292,19 +298,15 @@ fn snapshot() {
         ("snap_turbo.ppm", Vec3::new(0.0, 25.0, 95.0), 1, true, 0.0, 1.0, 0.0),
         // Luna Central City con Gotham detrás (jerarquía de transformaciones).
         ("snap_central_city.ppm", cc_pos + Vec3::new(1.6, 0.6, 2.2), cc, true, 0.0, 0.0, cc_time),
+        // Dentro del cinturón de asteroides, mirando al sol.
+        ("snap_asteroides.ppm", BELT_SHOT, 0, true, 0.0, 0.0, 0.0),
     ];
     for (name, pos, aim, normal_mapping, warp, boost, time) in shots {
         g.time = time;
         g.normal_mapping = normal_mapping;
         g.warp = warp;
         g.ship.boost = boost;
-        g.ship.position = pos;
-        // Apuntar la nave hacia el cuerpo elegido.
-        let target = g.scene.body_position(aim, g.time);
-        let d = (target - pos).normalized();
-        g.ship.yaw = (-d.x).atan2(-d.z);
-        g.ship.pitch = d.y.asin();
-        g.camera = ChaseCamera::new(&g.ship);
+        aim_ship(&mut g, pos, aim);
         // Medir rendimiento: promedio de 30 cuadros, separando geometría y sombreado.
         let (mut geo, mut shade) = (0.0f32, 0.0f32);
         for _ in 0..30 {
@@ -328,6 +330,43 @@ fn snapshot() {
             s.triangles_rasterized
         );
     }
+
+    // Comparación para la demo: la vista del cinturón con culling (C) y LOD (L) prendidos y apagados.
+    // Demuestra que las dos técnicas cambian el trabajo que hace el renderer.
+    g.time = 0.0;
+    g.ship.boost = 0.0;
+    aim_ship(&mut g, BELT_SHOT, 0);
+    for (culling, lod) in [(true, true), (false, true), (true, false), (false, false)] {
+        g.renderer.frustum_culling = culling;
+        g.renderer.use_lod = lod;
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            g.render();
+        }
+        let ms = start.elapsed().as_secs_f32() * 1000.0 / 10.0;
+        let s = g.renderer.stats;
+        println!(
+            "cinturon C={} L={}: {ms:.1} ms/cuadro  dibujados={} descartados={} tri_in={}",
+            if culling { "ON " } else { "OFF" },
+            if lod { "ON " } else { "OFF" },
+            s.objects_drawn,
+            s.objects_culled,
+            s.triangles_in
+        );
+    }
+}
+
+/// Posición de la nave para las tomas del cinturón de asteroides.
+const BELT_SHOT: Vec3 = Vec3::new(0.0, 1.5, 88.0);
+
+/// Pone la nave en `pos` mirando al cuerpo `aim`, con la cámara ya detrás de ella (para el snapshot).
+fn aim_ship(g: &mut Game, pos: Vec3, aim: usize) {
+    g.ship.position = pos;
+    let target = g.scene.body_position(aim, g.time);
+    let d = (target - pos).normalized();
+    g.ship.yaw = (-d.x).atan2(-d.z);
+    g.ship.pitch = d.y.asin();
+    g.camera = ChaseCamera::new(&g.ship);
 }
 
 fn read_input(rl: &RaylibHandle) -> ShipInput {

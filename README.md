@@ -107,8 +107,9 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), Central City (rayos), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `CentralCityShader`, `ExhaustShader` |
 | Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06`; Krypton: crestas ridged `1 - |fbm|`; Gotham: escalones por manzana | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |
-| Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C | `Renderer::sphere_visible` |
-| LOD según distancia + contador | 8 | ✅ tecla L | `Renderer::draw_lods` |
+| Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C; en el cinturón: 886 de 1508 objetos dibujados con C, todos sin C | `Renderer::sphere_visible` |
+| LOD según distancia + contador | 8 | ✅ tecla L; en el cinturón: 22 800 triángulos con L contra 385 680 sin L (`--snapshot` imprime la comparación) | `Renderer::draw_lods` |
+| Cinturón de asteroides (1500 rocas con semilla fija `ASTEROID_SEED`, 4 formas × 3 LODs, órbita de Kepler) | – | ✅ entre Krypton y Gotham | `exotics.rs` |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |
