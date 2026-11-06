@@ -46,16 +46,18 @@ const CENTRAL_CITY_RADIUS: f32 = 1.2;
 /// Radianes por segundo: da una vuelta a la luna en ~2 segundos.
 pub const FLASH_SPEED: f32 = 3.0;
 /// Tamaño de Flash (radio de su esfera envolvente).
-const FLASH_SIZE: f32 = 0.16;
+const FLASH_SIZE: f32 = 0.24;
 /// Flash: rojo, amarillo (rayo, botas, alitas), piel.
 const FLASH_PALETTE: [Vec3; 3] = [Vec3::new(0.80, 0.06, 0.04), YELLOW, SKIN];
 const FLASH_TRAIL: Vec3 = Vec3::new(1.0, 0.85, 0.15);
 
 // --- Batman (quieto en la azotea más alta de Gotham) ---
 /// Tamaño de Batman. Es más grande que un edificio para que se vea desde la nave.
-const BATMAN_SIZE: f32 = 0.22;
+const BATMAN_SIZE: f32 = 0.45;
 /// Batman: gris, negro (capa, máscara, botas), amarillo (cinturón, óvalo), piel.
-const BATMAN_PALETTE: [Vec3; 4] = [Vec3::new(0.30, 0.30, 0.34), BLACK, YELLOW, SKIN];
+const BATMAN_PALETTE: [Vec3; 4] = [Vec3::new(0.42, 0.44, 0.52), BATMAN_CAPE, YELLOW, SKIN];
+/// Capa azul muy oscuro (no negro puro): así la luz de borde dibuja su silueta.
+const BATMAN_CAPE: Vec3 = Vec3::new(0.07, 0.08, 0.14);
 
 // --- Aquaman montado en una ballena espacial (alrededor de Atlantis) ---
 /// Radio de Atlantis (debe coincidir con scene.rs).
@@ -69,7 +71,7 @@ const WHALE_BOB: f32 = 0.5;
 const WHALE_BOB_FREQ: f32 = 0.8;
 /// Tamaño de la ballena y de Aquaman.
 const WHALE_SIZE: f32 = 1.3;
-const AQUAMAN_SIZE: f32 = 0.22;
+const AQUAMAN_SIZE: f32 = 0.30;
 /// Qué tan arriba del centro de la ballena va parado Aquaman (su lomo), en múltiplos de su
 /// tamaño: el lomo del modelo está a ~0.21 de su radio envolvente (lo imprime modelar_heroes.py).
 const WHALE_BACK: f32 = 0.21;
@@ -92,14 +94,14 @@ const LANTERN_TURN: f32 = 0.4;
 /// Pulsos de luz por segundo (en radianes) y tamaño del aura en múltiplos de su tamaño.
 pub const LANTERN_PULSE_SPEED: f32 = 3.0;
 const LANTERN_AURA: f32 = 2.4;
-const LANTERN_SIZE: f32 = 0.3;
+const LANTERN_SIZE: f32 = 0.45;
 const LANTERN_GREEN: Vec3 = Vec3::new(0.15, 1.0, 0.35);
 /// Linterna Verde: verde (brilla), negro, piel, blanco (guantes, ojos, emblema).
 const LANTERN_PALETTE: [Vec3; 4] = [Vec3::new(0.05, 0.45, 0.15), BLACK, SKIN, Vec3::new(0.95, 0.95, 0.95)];
 
 // --- Mujer Maravilla (estatua gigante en Themyscira) ---
 /// Tamaño de la estatua: mucho más grande que los demás, es un monumento.
-const WONDER_WOMAN_SIZE: f32 = 0.9;
+const WONDER_WOMAN_SIZE: f32 = 1.2;
 /// La estatua tiene pedestal: sus pies (la base) están a 0.80 de su radio bajo el centro.
 const WONDER_WOMAN_FEET: f32 = 0.80;
 const STATUE_STONE: Vec3 = Vec3::new(0.90, 0.88, 0.82);
@@ -414,9 +416,7 @@ struct StoneShader;
 impl FragmentShader for StoneShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
         let veins = 0.9 + 0.1 * fbm(f.local_pos * 6.0, 3, 123);
-        let l = (u.light_pos - f.world_pos).normalized();
-        let diff = f.normal.dot(l).max(0.0);
-        STATUE_STONE * veins * (0.15 + 0.85 * diff)
+        hero_light(STATUE_STONE * veins, f, u)
     }
 }
 
@@ -427,6 +427,9 @@ pub fn draw_creature_glows(r: &mut Renderer, scene: &Scene, t: f32, creatures: &
             let model = Mat4::translation(c.position(scene, t)) * Mat4::scale(Vec3::splat(c.size * LANTERN_AURA));
             r.draw_mesh_additive(mesh, &model, Arc::new(AuraShader { color: *color }));
         }
+    }
+    if let Some(batman) = creatures.iter().find(|c| c.name == "Batman") {
+        draw_bat_signal(r, scene, t, batman);
     }
 }
 
@@ -441,11 +444,9 @@ struct LanternShader;
 
 impl FragmentShader for LanternShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
-        let l = (u.light_pos - f.world_pos).normalized();
-        let diff = f.normal.dot(l).max(0.0);
         let base = palette_color(&LANTERN_PALETTE, f.uv.0);
         let glow = if f.uv.0 < 1.0 / LANTERN_PALETTE.len() as f32 { 0.45 * pulse(u.time) } else { 0.0 };
-        base * (0.3 + 0.7 * diff) + LANTERN_GREEN * glow
+        hero_light(base, f, u) + LANTERN_GREEN * glow
     }
 }
 
@@ -484,7 +485,32 @@ fn palette_color(palette: &[Vec3], u: f32) -> Vec3 {
     palette[band]
 }
 
-/// Personaje con varios colores (paleta) iluminado con Blinn-Phong.
+// --- Iluminación de los personajes ("de cine") ---
+// Con solo la luz del sol, un héroe del lado de noche de su planeta sale negro. Por eso, además
+// del sol, tienen dos luces más, como en una película:
+//   - luz de RELLENO que sale de la cámara: ilumina lo que mira hacia nosotros (n·v);
+//   - luz de BORDE: un contorno brillante donde la superficie se ve de lado ((1 − n·v)³),
+//     que recorta la silueta contra el fondo oscuro.
+/// Luz mínima en todos lados.
+const HERO_AMBIENT: f32 = 0.18;
+/// Fuerza de la luz de relleno (desde la cámara).
+const HERO_FILL: f32 = 0.45;
+/// Fuerza y color de la luz de borde.
+const HERO_RIM: f32 = 0.7;
+const HERO_RIM_COLOR: Vec3 = Vec3::new(0.65, 0.75, 1.0);
+
+/// Sol (difuso + especular) + relleno + borde, para un color base dado.
+fn hero_light(base: Vec3, f: &Fragment, u: &Uniforms) -> Vec3 {
+    let l = (u.light_pos - f.world_pos).normalized();
+    let v = (u.camera_pos - f.world_pos).normalized();
+    let diff = f.normal.dot(l).max(0.0);
+    let facing = f.normal.dot(v).max(0.0);
+    let spec = f.normal.dot((l + v).normalized()).max(0.0).powf(24.0);
+    let rim = (1.0 - facing).powf(3.0);
+    base * (HERO_AMBIENT + 0.8 * diff + HERO_FILL * facing) + Vec3::splat(spec * 0.35) + HERO_RIM_COLOR * (rim * HERO_RIM)
+}
+
+/// Personaje con varios colores (paleta) con la iluminación de cine de arriba.
 struct HeroShader {
     /// Un color por banda, en el mismo orden que en modelar_heroes.py.
     palette: Vec<Vec3>,
@@ -492,13 +518,137 @@ struct HeroShader {
 
 impl FragmentShader for HeroShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
-        let base = palette_color(&self.palette, f.uv.0);
-        let l = (u.light_pos - f.world_pos).normalized();
-        let v = (u.camera_pos - f.world_pos).normalized();
-        let diff = f.normal.dot(l).max(0.0);
-        let spec = f.normal.dot((l + v).normalized()).max(0.0).powf(24.0);
-        base * (0.2 + 0.8 * diff) + Vec3::splat(spec * 0.35)
+        hero_light(palette_color(&self.palette, f.uv.0), f, u)
     }
+}
+
+// --- BATISEÑAL: un haz de luz que sale de la azotea de Batman y termina en el círculo con el
+// murciélago. Sirve para encontrarlo desde lejos. Se dibuja ADITIVO (es luz, se suma).
+/// Largo del haz y radio del círculo del final (unidades del mundo).
+const BAT_SIGNAL_LENGTH: f32 = 7.0;
+const BAT_SIGNAL_RADIUS: f32 = 1.2;
+/// Radio del haz donde sale, en fracción del radio del círculo.
+const BAT_SIGNAL_BASE: f32 = 0.08;
+/// Inclinación del haz respecto a la vertical de la azotea (radianes).
+const BAT_SIGNAL_TILT: f32 = 0.35;
+/// Color y brillo del haz y del círculo.
+const BAT_SIGNAL_COLOR: Vec3 = Vec3::new(1.0, 0.86, 0.45);
+const BAT_SIGNAL_BEAM: f32 = 0.30;
+const BAT_SIGNAL_DISC: f32 = 0.85;
+
+/// Cono abierto a lo largo de +Y: radio BAT_SIGNAL_BASE en y = 0 y radio 1 en y = 1.
+fn beam_mesh(segments: usize) -> Mesh {
+    let mut m = Mesh::default();
+    for (y, r) in [(0.0, BAT_SIGNAL_BASE), (1.0, 1.0)] {
+        for j in 0..segments {
+            let a = j as f32 / segments as f32 * std::f32::consts::TAU;
+            let position = Vec3::new(a.cos() * r, y, a.sin() * r);
+            m.vertices.push(Vertex { position, normal: Vec3::ZERO, uv: (0.0, y), tangent: Vec3::ZERO });
+        }
+    }
+    for j in 0..segments {
+        let k = (j + 1) % segments;
+        let (a, b, c, d) = (j as u32, k as u32, (segments + j) as u32, (segments + k) as u32);
+        // Antihorario visto desde afuera del cono (lo que el back-face culling deja pasar).
+        m.indices.extend([a, c, d, a, d, b]);
+    }
+    m.recompute_normals();
+    m.compute_bounds();
+    m
+}
+
+/// Disco de radio 1 en el plano XY (mira hacia +Z) hecho como un abanico de triángulos.
+fn disc_mesh(segments: usize) -> Mesh {
+    let mut m = Mesh::default();
+    let n = Vec3::new(0.0, 0.0, 1.0);
+    m.vertices.push(Vertex { position: Vec3::ZERO, normal: n, uv: (0.0, 0.0), tangent: Vec3::ZERO });
+    for j in 0..segments {
+        let a = j as f32 / segments as f32 * std::f32::consts::TAU;
+        m.vertices.push(Vertex { position: Vec3::new(a.cos(), a.sin(), 0.0), normal: n, uv: (0.0, 0.0), tangent: Vec3::ZERO });
+    }
+    for j in 0..segments {
+        m.indices.extend([0, 1 + j as u32, 1 + ((j + 1) % segments) as u32]);
+    }
+    m.compute_bounds();
+    m
+}
+
+/// Dibuja la batiseñal de Batman: el haz (cono) y, en la punta, el círculo mirando a la cámara.
+fn draw_bat_signal(r: &mut Renderer, scene: &Scene, t: f32, batman: &Creature) {
+    // Las mallas se arman una sola vez y se guardan (OnceLock = "inicializar la primera vez").
+    static MESHES: std::sync::OnceLock<(Mesh, Mesh)> = std::sync::OnceLock::new();
+    let (beam, disc) = MESHES.get_or_init(|| (beam_mesh(24), disc_mesh(40)));
+
+    // "Arriba" y "a un lado" de Batman salen de su propia matriz: así giran con Gotham.
+    let model = batman.model(scene, t);
+    let up = model.transform_dir(Vec3::UP).normalized();
+    let side = model.transform_dir(Vec3::new(1.0, 0.0, 0.0)).normalized();
+    let origin = batman.position(scene, t) + side * BATMAN_SIZE;
+    let dir = (up * BAT_SIGNAL_TILT.cos() + side * BAT_SIGNAL_TILT.sin()).normalized();
+
+    // Haz: el cono escalado (ancho = radio del círculo, alto = largo del haz).
+    let beam_model = oriented(origin, dir, side) * Mat4::scale(Vec3::new(BAT_SIGNAL_RADIUS, BAT_SIGNAL_LENGTH, BAT_SIGNAL_RADIUS));
+    r.draw_mesh_additive(beam, &beam_model, Arc::new(BeamShader { origin, dir }));
+
+    // Círculo: en la punta del haz, de frente a la cámara (un "billboard"), con las orejas
+    // del murciélago apuntando a lo largo del haz.
+    let end = origin + dir * BAT_SIGNAL_LENGTH;
+    let to_cam = r.uniforms.camera_pos - end;
+    let disc_model = oriented(end, dir, -to_cam) * Mat4::scale(Vec3::new(BAT_SIGNAL_RADIUS, BAT_SIGNAL_RADIUS, 1.0));
+    r.draw_mesh_additive(disc, &disc_model, Arc::new(BatDiscShader));
+}
+
+/// Haz de luz: más brillante al centro (donde lo vemos de frente) y se apaga hacia la punta.
+/// La normal se reconstruye desde el eje del haz (la escala no uniforme deforma la de la malla).
+struct BeamShader {
+    origin: Vec3,
+    dir: Vec3,
+}
+
+impl FragmentShader for BeamShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let rel = f.world_pos - self.origin;
+        let along = (rel.dot(self.dir) / BAT_SIGNAL_LENGTH).clamp(0.0, 1.0);
+        let normal = (rel - self.dir * rel.dot(self.dir)).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let facing = normal.dot(v).abs();
+        BAT_SIGNAL_COLOR * (BAT_SIGNAL_BEAM * facing * facing * (1.0 - 0.6 * along))
+    }
+}
+
+/// ¿El punto (x, y) del círculo (radio 1, y hacia las orejas) cae dentro del murciélago?
+/// Silueta hecha con desigualdades: cuerpo (elipse), cabeza con orejas y alas con el borde de
+/// abajo ondulado (las "puntas" de las alas).
+fn inside_bat(x: f32, y: f32) -> bool {
+    let ax = x.abs();
+    let body = (x / 0.16).powi(2) + (y / 0.32).powi(2) < 1.0;
+    let head = ax < 0.12 && y > 0.1 && y < 0.36;
+    let ears = ax > 0.05 && ax < 0.12 && y >= 0.36 && y < 0.46 - (ax - 0.08).abs();
+    let wing_top = 0.12 + 0.35 * ax * ax; // sube hacia las puntas
+    let wing_bottom = -0.05 - 0.12 * (ax * std::f32::consts::PI * 3.0).cos().abs() + 0.25 * ax;
+    let wings = ax < 0.82 && y < wing_top && y > wing_bottom;
+    body || head || ears || wings
+}
+
+/// Círculo de la batiseñal: luz amarilla con el borde suave y el murciélago en sombra.
+struct BatDiscShader;
+
+impl FragmentShader for BatDiscShader {
+    fn shade(&self, f: &Fragment, _u: &Uniforms) -> Vec3 {
+        let (x, y) = (f.local_pos.x, f.local_pos.y);
+        let d = (x * x + y * y).sqrt();
+        if inside_bat(x / 0.85, y / 0.85) {
+            return Vec3::ZERO; // aditivo: cero = no agrega luz → se ve la silueta oscura
+        }
+        let edge = 1.0 - smoothstep(0.85, 1.0, d);
+        BAT_SIGNAL_COLOR * (BAT_SIGNAL_DISC * edge)
+    }
+}
+
+/// Transición suave de 0 a 1 entre a y b.
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Estela que se desvanece: brillante junto al personaje (uv.0 = 0) y se apaga hacia la cola.

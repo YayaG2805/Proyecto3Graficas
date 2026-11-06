@@ -383,6 +383,21 @@ fn snapshot() {
         println!("{file}: listo");
     }
 
+    // Batiseñal: vista de lado del haz que sale de la azotea de Batman, con Gotham abajo.
+    if let Some(b) = g.creatures.iter().find(|c| c.name == "Batman") {
+        let model = b.model(&g.scene, g.time);
+        let (hero, up) = (b.position(&g.scene, g.time), model.transform_dir(Vec3::UP).normalized());
+        let across = up.cross(model.transform_dir(Vec3::new(1.0, 0.0, 0.0))).normalized();
+        let target = hero + up * 4.0;
+        g.camera.position = target + across * 11.0 + up * 1.5;
+        g.camera.target = target;
+        g.camera.up = up;
+        g.ship.position = g.camera.position + up * 40.0; // nave fuera de cuadro
+        g.render();
+        g.renderer.save_ppm("snap_batisenal.ppm").expect("no se pudo guardar");
+        println!("snap_batisenal.ppm: listo");
+    }
+
     // Un retrato de cada mundo desde su lado iluminado, con la nave en primer plano,
     // y otro a ras de suelo junto a uno de sus objetos de superficie (árboles, cristales...).
     for i in 0..g.scene.bodies.len() {
