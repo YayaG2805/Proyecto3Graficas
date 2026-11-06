@@ -96,10 +96,12 @@ impl FragmentShader for RockyShader {
 
 // ---------------------------------------------------------------------------
 // NAVE: Blinn-Phong (difuso + brillo especular) + luz de borde para que se vea
-// aunque esté del lado oscuro.
+// aunque esté del lado oscuro. Con el turbo, la parte de atrás se ilumina de azul.
 // ---------------------------------------------------------------------------
 pub struct ShipShader {
     pub base: Vec3,
+    /// Turbo, de 0 a 1: la luz azul de la llama ilumina la parte trasera de la nave.
+    pub boost: f32,
 }
 
 impl FragmentShader for ShipShader {
@@ -110,7 +112,46 @@ impl FragmentShader for ShipShader {
         let diff = f.normal.dot(l).max(0.0);
         let spec = f.normal.dot(h).max(0.0).powf(48.0);
         let rim = (1.0 - f.normal.dot(v).max(0.0)).powf(2.5) * 0.35;
-        self.base * (0.18 + 0.82 * diff) + Vec3::splat(spec * 0.7) + Vec3::new(0.3, 0.6, 1.0) * rim
+        let mut c = self.base * (0.18 + 0.82 * diff) + Vec3::splat(spec * 0.7) + Vec3::new(0.3, 0.6, 1.0) * rim;
+
+        // La llama del turbo ilumina la parte trasera de la nave (local +Z = atrás).
+        let back = smoothstep(0.35, 0.7, f.local_pos.z);
+        c += Vec3::new(0.25, 0.45, 0.9) * back * self.boost * 0.5;
+        c
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLAMA DEL TURBO: shader ADITIVO y animado. Se dibuja con Renderer::draw_mesh_additive,
+// así que su color se SUMA a lo que hay detrás (se ve como luz, no como un objeto sólido).
+//   uv.1 = 0 en la boca del motor, 1 en la punta de la llama.
+// ---------------------------------------------------------------------------
+pub struct ExhaustShader {
+    /// Intensidad del turbo (0 = invisible).
+    pub boost: f32,
+}
+
+impl FragmentShader for ExhaustShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let t = f.uv.1.clamp(0.0, 1.0);
+        // Más brillante donde la superficie mira a la cámara (el "centro" de la llama) y
+        // se desvanece hacia los bordes, que así no se ven como un contorno duro.
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let facing = f.normal.dot(v).abs();
+        let body = facing.powf(1.5);
+        // La llama es ancha y plana: sus extremos izquierdo/derecho (uv.0 cerca de 0 o 0.5,
+        // donde |cos| ≈ 1) se apagan para que no se vea un borde recto.
+        let side = 1.0 - smoothstep(0.55, 1.0, (f.uv.0 * std::f32::consts::TAU).cos().abs());
+        // Se apaga hacia la punta.
+        let fade = (1.0 - t).powf(1.8) * side;
+        // Pulsos que viajan hacia atrás: la fase avanza con el tiempo.
+        let pulse = 0.75 + 0.25 * (t * 22.0 - u.time * 38.0).sin();
+        let noise = 0.85 + 0.3 * fbm(Vec3::new(f.uv.0 * 8.0, t * 5.0 - u.time * 9.0, 0.0), 2, 5);
+        // Núcleo blanco-azul cerca del motor; azul más profundo hacia la punta.
+        let core = Vec3::new(0.85, 0.95, 1.0);
+        let outer = Vec3::new(0.15, 0.4, 1.0);
+        let c = mix(core, outer, smoothstep(0.0, 0.6, t));
+        c * (body * fade * pulse * noise * self.boost * 2.8)
     }
 }
 

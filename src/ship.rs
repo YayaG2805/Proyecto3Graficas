@@ -14,6 +14,8 @@ pub struct Ship {
     pub pitch: f32,
     /// Alabeo visual al girar (solo estético).
     pub roll: f32,
+    /// Turbo (0..1), suavizado. Controla la llama de atrás.
+    pub boost: f32,
 }
 
 /// Lo que el jugador presiona este cuadro (main.rs lo llena desde raylib).
@@ -28,7 +30,7 @@ pub struct ShipInput {
 
 impl Ship {
     pub fn new(position: Vec3) -> Ship {
-        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0 }
+        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0 }
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -58,8 +60,16 @@ impl Ship {
         self.roll += (target_roll - self.roll) * (1.0 - (-6.0 * dt).exp());
 
         // Aceleración progresiva hacia adelante + fricción exponencial.
+        // El turbo (Shift) empuja hacia adelante aunque no se presione W.
+        let thrust = if input.boost { 1.0 } else { input.thrust };
         let accel = if input.boost { 60.0 } else { 20.0 };
-        self.velocity += self.forward() * (input.thrust * accel * dt);
+        self.velocity += self.forward() * (thrust * accel * dt);
+
+        // Turbo: sube y baja suave (independiente de los FPS). Enciende rápido y se apaga
+        // un poco más lento, como si la llama se fuera consumiendo.
+        let boost_target = if input.boost { 1.0 } else { 0.0 };
+        let boost_rate = if boost_target > self.boost { 8.0 } else { 3.0 };
+        self.boost += (boost_target - self.boost) * (1.0 - (-boost_rate * dt).exp());
         let drag = if input.brake { 3.0 } else { 0.6 };
         self.velocity = self.velocity * (-drag * dt).exp();
         self.position += self.velocity * dt;

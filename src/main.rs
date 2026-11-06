@@ -18,7 +18,7 @@ use mesh::Mesh;
 use raylib::prelude::*;
 use renderer::{Renderer, Uniforms};
 use scene::Scene;
-use shaders::{ShipShader, Sky};
+use shaders::{ExhaustShader, ShipShader, Sky};
 use ship::{ChaseCamera, Ship, ShipInput};
 use std::sync::Arc;
 
@@ -33,6 +33,10 @@ const FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
 const WARP_FOV_EXTRA: f32 = 30.0 * std::f32::consts::PI / 180.0;
 const NEAR: f32 = 0.1;
 const FAR: f32 = 2000.0;
+/// Color de la nave (gris claro de carguero).
+const SHIP_COLOR: Vec3 = Vec3::new(0.72, 0.72, 0.70);
+/// Qué fracción trasera del largo de la nave se usa para medir de dónde sale la llama del turbo.
+const EXHAUST_ZONE: f32 = 0.05;
 
 /// Todo lo que necesitamos para dibujar un cuadro.
 struct Game {
@@ -40,7 +44,9 @@ struct Game {
     scene: Scene,
     ship: Ship,
     ship_mesh: Mesh,
-    ship_shader: Arc<ShipShader>,
+    /// Llama del turbo y el punto (en espacio de la nave) de donde sale.
+    exhaust_mesh: Mesh,
+    exhaust_origin: Vec3,
     /// Cielo con la nebulosa precalculada.
     sky: Sky,
     camera: ChaseCamera,
@@ -54,10 +60,28 @@ struct Game {
 
 impl Game {
     fn new() -> Game {
-        let ship_mesh = Mesh::load_obj("assets/nave.obj", Some(1.5)).unwrap_or_else(|e| {
+        // Halcón Milenario modelado en Blender. La nave anterior sigue en assets/nave.obj.
+        let ship_mesh = Mesh::load_obj("assets/Halcon_Milenario.obj", Some(1.5)).unwrap_or_else(|e| {
             eprintln!("No se pudo cargar la nave ({e}); usando nave provisional");
             Mesh::placeholder_ship()
         });
+        // La llama sale de la parte más trasera de la nave (local +Z = atrás): tomamos los
+        // vértices que están en el último EXHAUST_ZONE del largo y medimos su ancho y alto.
+        let (min_z, max_z) = ship_mesh
+            .vertices
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v.position.z), b.max(v.position.z)));
+        let rear_z = max_z - (max_z - min_z) * EXHAUST_ZONE;
+        let (lo, hi) = ship_mesh
+            .bounds_where(|v| v.position.z >= rear_z)
+            .unwrap_or((Vec3::new(-0.5, -0.05, 0.8), Vec3::new(0.5, 0.05, 1.0)));
+        let half_w = (hi.x - lo.x) * 0.5 * 0.9;
+        let half_h = ((hi.y - lo.y) * 0.5 * 1.6).max(half_w * 0.18);
+        // Empieza un poco metida en la nave: lo que queda dentro del casco lo tapa el
+        // z-buffer, así no hay huecos entre la nave y la llama.
+        let exhaust_origin = Vec3::new((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, (lo.z + hi.z) * 0.5);
+        let exhaust_mesh = Mesh::exhaust_plume(half_w, half_h, 24);
+
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
         let uniforms = Game::make_uniforms(&camera, 0.0, true, 0.0);
@@ -66,7 +90,8 @@ impl Game {
             scene: Scene::new(),
             ship,
             ship_mesh,
-            ship_shader: Arc::new(ShipShader { base: Vec3::new(0.15, 0.45, 0.85) }), // Kd del material "Casco"
+            exhaust_mesh,
+            exhaust_origin,
             sky: Sky::new(),
             camera,
             time: 0.0,
@@ -121,7 +146,18 @@ impl Game {
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
-        self.renderer.draw_mesh(&self.ship_mesh, &model, self.ship_shader.clone());
+        // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
+        let ship_shader = Arc::new(ShipShader { base: SHIP_COLOR, boost: self.ship.boost });
+        self.renderer.draw_mesh(&self.ship_mesh, &model, ship_shader);
+
+        // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
+        if self.ship.boost > 0.01 {
+            // Largo de la llama (en unidades de la nave, que mide ~3 de punta a punta).
+            let length = 0.4 + 2.4 * self.ship.boost;
+            let plume = model * Mat4::translation(self.exhaust_origin) * Mat4::scale(Vec3::new(1.0, 1.0, length));
+            self.renderer
+                .draw_mesh_additive(&self.exhaust_mesh, &plume, Arc::new(ExhaustShader { boost: self.ship.boost }));
+        }
     }
 }
 
@@ -129,19 +165,22 @@ impl Game {
 /// Sirve para probar el renderer sin abrir la ventana.
 fn snapshot() {
     let mut g = Game::new();
-    // (archivo, posición de la nave, mapeo de normales, warp)
+    // (archivo, posición de la nave, mapeo de normales, warp, turbo)
     let shots = [
-        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), true, 0.0),
-        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), true, 0.0),
-        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), true, 0.0),
+        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), true, 0.0, 0.0),
+        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), true, 0.0, 0.0),
+        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), true, 0.0, 0.0),
         // Misma vista sin mapeo de normales, para comparar.
-        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), false, 0.0),
+        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), false, 0.0, 0.0),
         // Efecto warp al máximo.
-        ("snap_warp.ppm", Vec3::new(0.0, 25.0, 95.0), true, 1.0),
+        ("snap_warp.ppm", Vec3::new(0.0, 25.0, 95.0), true, 1.0, 0.0),
+        // Turbo al máximo: motores blancos + llama.
+        ("snap_turbo.ppm", Vec3::new(0.0, 25.0, 95.0), true, 0.0, 1.0),
     ];
-    for (name, pos, normal_mapping, warp) in shots {
+    for (name, pos, normal_mapping, warp, boost) in shots {
         g.normal_mapping = normal_mapping;
         g.warp = warp;
+        g.ship.boost = boost;
         g.ship.position = pos;
         // Apuntar la nave hacia el planeta rocoso.
         let target = g.scene.bodies[1].position(g.time);

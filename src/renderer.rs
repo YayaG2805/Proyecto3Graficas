@@ -118,6 +118,8 @@ pub struct Renderer {
     /// Imagen final RGBA8 que se sube a la textura de raylib.
     pub color: Vec<u8>,
     gbuffer: Vec<GPixel>,
+    /// Luz que se SUMA encima de la imagen (objetos aditivos, como la llama del turbo).
+    glow: Vec<Vec3>,
     shaders: Vec<Arc<dyn FragmentShader>>,
     pub uniforms: Uniforms,
     pub stats: Stats,
@@ -133,6 +135,7 @@ impl Renderer {
             height,
             color: vec![0; width * height * 4],
             gbuffer: vec![GPixel::default(); width * height],
+            glow: vec![Vec3::ZERO; width * height],
             shaders: Vec::new(),
             uniforms,
             stats: Stats::default(),
@@ -146,6 +149,7 @@ impl Renderer {
         self.stats = Stats::default();
         self.shaders.clear();
         self.gbuffer.fill(GPixel::default());
+        self.glow.fill(Vec3::ZERO);
     }
 
     /// ¿La esfera (centro en mundo, radio) toca el volumen de visión? (culling)
@@ -166,6 +170,19 @@ impl Renderer {
     /// Dibuja una malla con su matriz de modelo y su shader.
     /// Devuelve false si se descartó por estar fuera de la vista.
     pub fn draw_mesh(&mut self, mesh: &Mesh, model: &Mat4, shader: Arc<dyn FragmentShader>) -> bool {
+        self.draw_mesh_mode(mesh, model, shader, false)
+    }
+
+    /// Dibuja una malla ADITIVA (luz: llamas, brillos). Diferencias con `draw_mesh`:
+    ///   - Hace la prueba de profundidad contra lo opaco, pero NO escribe en el z-buffer,
+    ///     así que lo que está detrás se sigue viendo (parece transparente).
+    ///   - El shader se ejecuta en el momento (no al final) y su color se SUMA en `glow`.
+    /// Se debe llamar DESPUÉS de dibujar todos los objetos opacos del cuadro.
+    pub fn draw_mesh_additive(&mut self, mesh: &Mesh, model: &Mat4, shader: Arc<dyn FragmentShader>) -> bool {
+        self.draw_mesh_mode(mesh, model, shader, true)
+    }
+
+    fn draw_mesh_mode(&mut self, mesh: &Mesh, model: &Mat4, shader: Arc<dyn FragmentShader>, additive: bool) -> bool {
         // --- 1. Culling por esfera envolvente ---
         if self.frustum_culling {
             let center = model.transform_point(Vec3::ZERO);
@@ -178,11 +195,16 @@ impl Renderer {
         self.stats.objects_drawn += 1;
         self.stats.triangles_in += mesh.triangle_count() as u32;
 
-        if self.shaders.len() >= u16::MAX as usize - 1 {
-            return false;
-        }
-        let draw_id = self.shaders.len() as u16 + 1; // 0 = vacío
-        self.shaders.push(shader);
+        // Los objetos aditivos no ocupan píxeles del G-buffer, así que no necesitan draw_id.
+        let (draw_id, additive_shader) = if additive {
+            (0, Some(shader))
+        } else {
+            if self.shaders.len() >= u16::MAX as usize - 1 {
+                return false;
+            }
+            self.shaders.push(shader);
+            (self.shaders.len() as u16, None) // 0 = vacío, así que el primero es 1
+        };
 
         // --- 2. Etapa de vértices ---
         let mvp = self.uniforms.projection * self.uniforms.view * *model;
@@ -212,7 +234,7 @@ impl Renderer {
             // Recorte contra el plano cercano: z + w >= 0 (si no, se dibuja "detrás" de la cámara).
             let polygon = clip_near(&[a, b, c]);
             for i in 1..polygon.len().saturating_sub(1) {
-                self.raster_triangle(&polygon[0], &polygon[i], &polygon[i + 1], draw_id);
+                self.raster_triangle(&polygon[0], &polygon[i], &polygon[i + 1], draw_id, additive_shader.as_deref());
             }
         }
         true
@@ -299,7 +321,15 @@ impl Renderer {
     }
 
     /// --- 4 a 7: pantalla, back-face, rasterizado y z-buffer ---
-    fn raster_triangle(&mut self, a: &ClipVertex, b: &ClipVertex, c: &ClipVertex, draw_id: u16) {
+    /// `additive`: si viene un shader, el triángulo es aditivo (ver `draw_mesh_additive`).
+    fn raster_triangle(
+        &mut self,
+        a: &ClipVertex,
+        b: &ClipVertex,
+        c: &ClipVertex,
+        draw_id: u16,
+        additive: Option<&dyn FragmentShader>,
+    ) {
         let (w, h) = (self.width as f32, self.height as f32);
 
         // División de perspectiva y viewport.
@@ -356,15 +386,23 @@ impl Renderer {
                     continue; // prueba de profundidad: ya hay algo más cerca
                 }
                 let wcorr = 1.0 / inv_w;
-                gp.inv_w = inv_w;
-                gp.draw = draw_id;
-                gp.frag = Fragment {
+                let frag = Fragment {
                     world_pos: (wa * b0 + wb * b1 + wc * b2) * wcorr,
                     normal: (na * b0 + nb * b1 + nc * b2) * wcorr, // se normaliza al sombrear
                     local_pos: (la * b0 + lb * b1 + lc * b2) * wcorr,
                     uv: ((ua.0 * b0 + ub.0 * b1 + uc.0 * b2) * wcorr, (ua.1 * b0 + ub.1 * b1 + uc.1 * b2) * wcorr),
                     tangent: (ta * b0 + tb * b1 + tc * b2) * wcorr,
                 };
+                if let Some(shader) = additive {
+                    // Aditivo: sombrear ya y sumar la luz; el z-buffer no cambia.
+                    let mut f = frag;
+                    f.normal = f.normal.normalized();
+                    self.glow[row + px] += shader.shade(&f, &self.uniforms);
+                    continue;
+                }
+                gp.inv_w = inv_w;
+                gp.draw = draw_id;
+                gp.frag = frag;
             }
         }
     }
@@ -375,6 +413,7 @@ impl Renderer {
         let (w, h) = (self.width, self.height);
         let shaders = &self.shaders;
         let gbuffer = &self.gbuffer;
+        let glow = &self.glow;
         let ty = (u.fov_y * 0.5).tan();
         let tx = ty * u.aspect;
 
@@ -391,7 +430,8 @@ impl Renderer {
                     f.normal = f.normal.normalized();
                     shaders[gp.draw as usize - 1].shade(&f, &u)
                 };
-                let c = rgb.clamp01();
+                // Mezcla aditiva: la luz de los objetos aditivos se suma al color de abajo.
+                let c = (rgb + glow[y * w + x]).clamp01();
                 let i = x * 4;
                 row[i] = (c.x * 255.0) as u8;
                 row[i + 1] = (c.y * 255.0) as u8;

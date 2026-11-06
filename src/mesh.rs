@@ -177,6 +177,57 @@ impl Mesh {
         mesh
     }
 
+    /// Caja (mínimo, máximo) de los vértices que cumplen `pred`. None si ninguno la cumple.
+    /// Sirve, por ejemplo, para encontrar dónde están los motores de la nave (material MOTOR).
+    pub fn bounds_where(&self, pred: impl Fn(&Vertex) -> bool) -> Option<(Vec3, Vec3)> {
+        let mut it = self.vertices.iter().filter(|v| pred(v)).map(|v| v.position);
+        let first = it.next()?;
+        Some(it.fold((first, first), |(lo, hi), p| {
+            (
+                Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)),
+                Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)),
+            )
+        }))
+    }
+
+    /// LLAMA del motor: un cono de sección elíptica que sale hacia +Z (atrás de la nave).
+    /// La boca mide `half_w` x `half_h` (semiejes) en z = 0 y la punta está en z = 1;
+    /// el largo real se da con la matriz de modelo (escala en Z según el turbo).
+    /// uv = (vuelta alrededor de 0 a 1, avance a lo largo de 0 a 1).
+    pub fn exhaust_plume(half_w: f32, half_h: f32, segments: u32) -> Mesh {
+        // (avance z, radio relativo): se ensancha un poco al salir y luego se cierra en punta.
+        let rings = [(0.0, 0.9), (0.15, 1.0), (0.45, 0.8), (0.75, 0.45), (1.0, 0.0)];
+        let n = segments as usize;
+        let mut mesh = Mesh::default();
+        for &(z, r) in &rings {
+            for j in 0..n {
+                let a = j as f32 / n as f32 * std::f32::consts::TAU;
+                mesh.vertices.push(Vertex {
+                    position: Vec3::new(a.cos() * r * half_w, a.sin() * r * half_h, z),
+                    normal: Vec3::ZERO,
+                    uv: (j as f32 / n as f32, z),
+                    tangent: Vec3::ZERO,
+                });
+            }
+        }
+        // Cada par de anillos se une con quads (2 triángulos), antihorarios vistos desde afuera.
+        for i in 0..rings.len() - 1 {
+            for j in 0..n {
+                let k = (j + 1) % n;
+                let (p00, p01) = ((i * n + j) as u32, (i * n + k) as u32);
+                let (p10, p11) = (((i + 1) * n + j) as u32, ((i + 1) * n + k) as u32);
+                mesh.indices.extend([p00, p01, p11, p00, p11, p10]);
+            }
+        }
+        mesh.recompute_normals();
+        // En la punta todos los puntos coinciden: su normal debe apuntar hacia atrás.
+        for v in mesh.vertices.iter_mut().skip((rings.len() - 1) * n) {
+            v.normal = Vec3::new(0.0, 0.0, 1.0);
+        }
+        mesh.compute_bounds();
+        mesh
+    }
+
     /// Nave provisional (una "flecha" low-poly) mientras modelamos la de verdad en Blender.
     /// La nariz apunta a -Z (adelante en espacio local).
     /// TODO(nave): reemplazar por assets/ship.obj modelado por nosotros.
