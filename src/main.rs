@@ -145,7 +145,9 @@ impl Game {
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
         let uniforms = Game::make_uniforms(&camera, 0.0, true, 0.0, ship.position);
+        // los cristales se reparten alrededor de los mundos, por eso el estado necesita la escena
         let scene = Scene::new();
+        let state = GameState::new(&scene);
         let creatures = create_creatures(&scene);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
@@ -163,7 +165,7 @@ impl Game {
             time: 0.0,
             normal_mapping: true,
             warp: 0.0,
-            state: GameState::new(),
+            state,
             card_body: None,
             card_timer: 0.0,
         }
@@ -273,6 +275,7 @@ impl Game {
         let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp, self.ship.position);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
+        self.state.draw_collectibles(&mut self.renderer, &self.scene, self.time);
         self.asteroids.draw(&mut self.renderer, self.time);
         self.comet.draw_nucleus(&mut self.renderer, self.time);
         creatures::draw_creatures(&mut self.renderer, &self.scene, self.time, &self.creatures);
@@ -646,6 +649,24 @@ mod tests {
         assert!(!g.state.photo_mode);
         g.update(accelerate, dt);
         assert!(g.time > time);
+    }
+
+    #[test]
+    fn un_cristal_recogido_ya_no_se_dibuja() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        // sin culling todo cuenta, asi la resta no depende de pa donde mire la camara
+        g.renderer.frustum_culling = false;
+        g.draw_geometry();
+        let before = g.renderer.stats.objects_drawn;
+
+        // pongo la nave encima de un cristal y corre un cuadro
+        g.ship.position = g.state.remaining_positions(&g.scene, g.time + dt)[0];
+        g.update(ShipInput::default(), dt);
+        assert_eq!(g.state.collected, 1);
+
+        g.draw_geometry();
+        assert_eq!(g.renderer.stats.objects_drawn, before - 1);
     }
 
     #[test]

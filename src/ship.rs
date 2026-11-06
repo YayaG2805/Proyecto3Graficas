@@ -119,7 +119,7 @@ struct WarpTrip {
 }
 
 // el radio donde empieza la colision de un cuerpo, la deformacion de los planetas llega hasta un 12%
-fn collision_radius(radius: f32) -> f32 {
+pub fn collision_radius(radius: f32) -> f32 {
     radius * 1.12 + 0.8
 }
 
@@ -1168,6 +1168,38 @@ mod tests {
         }
         println!("{trips} viajes, el mas largo tardo {slowest:.1} s, lo mas cerca de una colision fue {worst_margin:.2}");
         assert!(worst_margin > 0.0);
+    }
+
+    #[test]
+    fn llegar_a_un_planeta_con_luna_no_choca_con_la_luna() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let gotham = scene.bodies.iter().position(|b| b.name == "Gotham").unwrap();
+        let moon = scene.bodies.iter().position(|b| b.name == "Central City").unwrap();
+        let moon_collision = collision_radius(scene.bodies[moon].radius);
+        let mut worst_margin = f32::MAX;
+        let mut cancelled = 0;
+
+        // la luna da la vuelta cada 10 s, asi q pruebo salir en muchos momentos de su vuelta
+        for k in 0..120 {
+            let start = k as f32 * 0.37;
+            let mut ship = Ship::new(scene.body_position(5, start) + Vec3::new(0.0, 8.0, 0.0));
+            ship.start_warp(gotham, &scene, start);
+            let mut t = start;
+            while ship.warping() {
+                t += dt;
+                ship.update(ShipInput::default(), dt, &scene, t);
+                let margin = (scene.body_position(moon, t) - ship.position).length() - moon_collision;
+                worst_margin = worst_margin.min(margin);
+            }
+            let arrival = (scene.body_position(gotham, t) - ship.position).length();
+            if (arrival - WARP_ARRIVE_RADII * scene.bodies[gotham].radius).abs() > 1.0 {
+                cancelled += 1;
+            }
+        }
+        println!("llegando a gotham: {cancelled} de 120 viajes cortados, lo mas cerca de la luna fue {worst_margin:.2}");
+        assert_eq!(cancelled, 0);
+        assert!(worst_margin >= -0.01);
     }
 
     #[test]

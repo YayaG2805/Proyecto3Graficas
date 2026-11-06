@@ -85,7 +85,7 @@ src/
   scene.rs      sol y planetas: órbitas, rotación, LODs, posición con jerarquía (lunas)
   props.rs      objetos sobre la superficie (por ahora solo las estructuras)
   ship.rs       nave (física simple, colisión), shader del Halcón y cámara de persecución
-  interaction.rs estado del juego: cuerpo más cercano, escaneo, destino del warp, modo foto
+  interaction.rs estado del juego: cuerpo más cercano, escaneo, destino del warp, modo foto, cristales coleccionables
 assets/
   Halcon_Milenario.obj / .mtl / .blend   nave actual: Halcón Milenario low-poly (1680 triángulos)
   nave.obj / nave.mtl / nave.blend   primera nave, modelada en Blender (respaldo si falla la carga del Halcón)
@@ -119,6 +119,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Atracción gravitatoria | 10 | ✅ tecla G, se ve en el HUD | `Ship::gravity_accel` |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
+| Cristales coleccionables (extra) | – | ✅ 2 por mundo con semilla fija, contador en el HUD | `interaction.rs`, `COLLECTIBLE_SEED`, `CrystalShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
 | Warping animado (rúbrica) | – | ✅ Tab viaja por el espacio sin teletransporte y esquiva lo que tenga en medio | `Ship::warp_step`, `warp_streaks` en `shaders.rs`, FOV en `main.rs` |
 | HUD: ficha del mundo escaneado, destino y radar (claridad del recorrido) | – | ✅ tecla E y 1–5; radar abajo a la derecha dibujado en nuestro framebuffer | `hud.rs`, `Game::draw_overlay` |
