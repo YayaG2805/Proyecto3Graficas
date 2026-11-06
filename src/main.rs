@@ -3,6 +3,7 @@
 //! raylib SOLO se usa para la ventana, leer teclado/mouse, mostrar nuestro framebuffer
 //! como textura 2D y escribir texto del HUD. Todo el 3D lo hace `renderer.rs`.
 
+mod hud;
 mod interaction;
 mod math;
 mod mesh;
@@ -15,6 +16,7 @@ mod shaders;
 mod ship;
 mod texture;
 
+use hud::{Canvas, RadarBlip};
 use interaction::GameState;
 use math::{Mat4, Vec3};
 use mesh::Mesh;
@@ -41,6 +43,37 @@ const SHIP_COLOR: Vec3 = Vec3::new(0.72, 0.72, 0.70);
 /// Qué fracción trasera del largo de la nave se usa para medir de dónde sale la llama del turbo.
 const EXHAUST_ZONE: f32 = 0.05;
 
+// --- HUD ---
+/// Segundos que dura abierta la ficha de un planeta escaneado.
+const SCAN_CARD_SECONDS: f32 = 6.0;
+/// La ficha se cierra si la nave se aleja más de estos radios de la superficie.
+const SCAN_CARD_CLOSE_RADII: f32 = 4.0;
+/// Se muestra el aviso "[E] escanear" a menos de estos radios (igual que el rango de interaction.rs).
+const SCAN_HINT_RADII: f32 = 3.0;
+/// Rectángulo de la ficha en píxeles INTERNOS (la ventana es el doble).
+const CARD_X0: i32 = 440;
+const CARD_Y0: i32 = 44;
+const CARD_X1: i32 = 634;
+const CARD_Y1: i32 = 152;
+/// Letras por renglón del dato curioso.
+const CARD_WRAP: usize = 40;
+/// Escala de la resolución interna a la ventana (1280 / 640).
+const HUD_SCALE: i32 = WINDOW_W / RENDER_W as i32;
+
+/// Color del punto de cada cuerpo en el radar.
+fn body_color(name: &str) -> Vec3 {
+    match name {
+        "Sol" => Vec3::new(1.0, 0.8, 0.2),
+        "Themyscira" => Vec3::new(0.45, 0.85, 0.55),
+        "Krypton" => Vec3::new(0.40, 0.70, 1.0),
+        "Gotham" => Vec3::new(0.62, 0.62, 0.68),
+        "Atlantis" => Vec3::new(0.15, 0.45, 1.0),
+        "Oa" => Vec3::new(0.30, 1.0, 0.40),
+        "Central City" => Vec3::new(1.0, 0.92, 0.30),
+        _ => Vec3::new(0.9, 0.9, 0.9),
+    }
+}
+
 /// Todo lo que necesitamos para dibujar un cuadro.
 struct Game {
     renderer: Renderer,
@@ -62,6 +95,9 @@ struct Game {
     warp: f32,
     /// cual mundo esta cerca, el destino, el modo foto... lo actualiza interaction.rs
     state: GameState,
+    /// Cuerpo cuya ficha está abierta en el HUD y cuántos segundos lleva abierta.
+    card_body: Option<usize>,
+    card_timer: f32,
 }
 
 impl Game {
@@ -113,6 +149,8 @@ impl Game {
             normal_mapping: true,
             warp: 0.0,
             state: GameState::new(),
+            card_body: None,
+            card_timer: 0.0,
         }
     }
 
@@ -154,6 +192,22 @@ impl Game {
         // paso 3: el efecto del warp ahora lo decide el estado del juego
         self.warp = self.state.warp;
 
+        // paso 3b: la ficha del planeta escaneado se cierra sola a los SCAN_CARD_SECONDS
+        // o si la nave se aleja. Usa dt real, así también corre en modo foto.
+        if self.state.scanned != self.card_body {
+            self.card_body = self.state.scanned; // escaneo nuevo: reinicia el reloj
+            self.card_timer = 0.0;
+        }
+        if let Some(i) = self.card_body {
+            self.card_timer += dt;
+            let radius = self.scene.bodies[i].radius;
+            let dist = (self.scene.body_position(i, self.time) - self.ship.position).length() - radius;
+            if self.card_timer > SCAN_CARD_SECONDS || dist > SCAN_CARD_CLOSE_RADII * radius {
+                self.state.scanned = None;
+                self.card_body = None;
+            }
+        }
+
         // paso 4: la camara va de ultimo pa q siga a la nave ya en su posicion final del cuadro
         self.camera.update(&self.ship, dt);
     }
@@ -161,6 +215,29 @@ impl Game {
     fn render(&mut self) {
         self.draw_geometry();
         self.shade();
+        self.draw_overlay();
+    }
+
+    /// HUD dibujado en NUESTRO framebuffer: el radar y el fondo de la ficha.
+    /// Va después del sombreado porque se pinta encima de la imagen final.
+    fn draw_overlay(&mut self) {
+        let blips: Vec<RadarBlip> = self
+            .scene
+            .bodies
+            .iter()
+            .enumerate()
+            .map(|(i, b)| RadarBlip {
+                offset: self.scene.body_position(i, self.time) - self.ship.position,
+                size: (b.radius * 0.35).clamp(1.5, 4.0),
+                color: body_color(b.name),
+                highlight: i == self.state.warp_target,
+            })
+            .collect();
+        let mut cv = Canvas { px: &mut self.renderer.color, w: RENDER_W, h: RENDER_H };
+        hud::draw_radar(&mut cv, self.ship.forward(), &blips);
+        if self.card_body.is_some() {
+            hud::draw_panel(&mut cv, CARD_X0, CARD_Y0, CARD_X1, CARD_Y1);
+        }
     }
 
     /// Etapa 8: fragment shaders de cada píxel visible; los vacíos usan el cielo.
@@ -232,6 +309,7 @@ fn snapshot() {
             shade += t1.elapsed().as_secs_f32();
         }
         let (geo, shade) = (geo * 1000.0 / 30.0, shade * 1000.0 / 30.0);
+        g.draw_overlay(); // radar del HUD, para verlo también en las capturas
         g.renderer.save_ppm(name).expect("no se pudo guardar");
         let s = g.renderer.stats;
         println!(
@@ -363,32 +441,68 @@ fn main() {
             18,
             Color::LIGHTGRAY,
         );
-        // el destino del warp y si ya vamos viajando
+        // El destino del warp, si ya vamos viajando y los coleccionables
+        // (el total lo llena interaction.rs cuando haya cristales).
+        let target = game.scene.bodies[game.state.warp_target].name;
+        let crystals = if game.state.total > 0 {
+            format!("{}/{}", game.state.collected, game.state.total)
+        } else {
+            "-".to_string()
+        };
         d.draw_text(
             &format!(
-                "destino [1-5]: {}   warp [Tab]: {}",
-                game.scene.bodies[game.state.warp_target].name,
+                "destino [1-5]: {target}   warp [Tab]: {}   cristales: {crystals}",
                 if game.ship.warping() { "viajando" } else { "listo" }
             ),
             10,
             78,
             18,
-            Color::LIGHTGRAY,
+            Color::SKYBLUE,
         );
+
+        // Aviso para escanear cuando hay un mundo cerca y su ficha no está abierta.
+        if let Some(i) = game.state.nearest {
+            let b = &game.scene.bodies[i];
+            if game.card_body.is_none() && game.state.nearest_dist < SCAN_HINT_RADII * b.radius {
+                d.draw_text(&format!("[E] escanear {}", hud::to_ascii(b.name)), 10, 102, 20, Color::GOLD);
+            }
+        }
+
+        // Ficha del planeta escaneado (el fondo ya lo pintó draw_overlay en el framebuffer).
+        if let Some(i) = game.card_body {
+            let b = &game.scene.bodies[i];
+            let (x, mut y) = (CARD_X0 * HUD_SCALE + 14, CARD_Y0 * HUD_SCALE + 12);
+            d.draw_text(&hud::to_ascii(b.info.title), x, y, 24, Color::RAYWHITE);
+            y += 30;
+            d.draw_text(&format!("Heroe: {}", hud::to_ascii(b.info.hero)), x, y, 18, Color::GOLD);
+            y += 28;
+            for line in hud::wrap(&hud::to_ascii(b.info.fact), CARD_WRAP) {
+                d.draw_text(&line, x, y, 16, Color::LIGHTGRAY);
+                y += 20;
+            }
+            d.draw_text(
+                &format!("radio: {:.1}   gravedad: {:.0}", b.radius, b.gravity),
+                x,
+                CARD_Y1 * HUD_SCALE - 30,
+                18,
+                Color::SKYBLUE,
+            );
+        }
+
         if show_help {
             // son dos lineas porque en una ya no cabia en la ventana
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear",
                 10,
-                WINDOW_H - 50,
-                18,
+                WINDOW_H - 48,
+                16,
                 Color::GOLD,
             );
             d.draw_text(
-                "Tab warp   1-5 destino   F orbita   G gravedad   P foto   O orbitas   N normales   C culling   L LOD",
+                "1-5 destino   Tab warp (otro Tab cancela)   G gravedad   P foto   C culling   L LOD   O orbitas   N normales   H ayuda",
                 10,
-                WINDOW_H - 28,
-                18,
+                WINDOW_H - 26,
+                16,
                 Color::GOLD,
             );
         }

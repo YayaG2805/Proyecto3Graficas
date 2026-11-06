@@ -56,8 +56,6 @@ const OA_SEED: u32 = 57;
 const OA_RELIEF: f32 = 0.015;
 
 /// la ficha de un mundo, lo q se ve en el hud cuando lo escaneas
-// el allow se quita cuando el hud (d3) ya lea estos textos
-#[allow(dead_code)]
 pub struct PlanetInfo {
     pub title: &'static str,
     pub hero: &'static str,
@@ -71,7 +69,6 @@ pub struct Body {
     pub parent: Option<usize>,
     /// fuerza con la q atrae a la nave (a = gravity / d²)
     pub gravity: f32,
-    #[allow(dead_code)]
     pub info: PlanetInfo,
     /// objetos parados sobre la superficie, los llena sando en s6
     pub props: Vec<PropInstance>,

@@ -45,10 +45,11 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | O | Mostrar/ocultar las órbitas de los planetas |
 | N | Activar/desactivar el mapeo de normales (para comparar) |
 | P | Modo foto: congela la simulación |
-| 1 a 5 | Elegir el mundo destino del warp (se ve en el HUD) |
+| 1 a 5 | Elegir el mundo destino del warp (se ve en el HUD y con un anillo en el radar) |
 | Tab | Viajar al destino con warp; otro Tab cancela el viaje |
 | F | Modo órbita cerca de un planeta (el HUD avisa cuando se puede). W/S lo rodean, A/D cambian el rumbo, flechas cambian la altura. F o Shift lo sueltan |
 | G | Activar/desactivar la gravedad de los planetas y el sol |
+| E | Escanear el mundo cercano (el HUD avisa cuando se puede): abre su ficha por 6 s |
 | H | Mostrar/ocultar ayuda |
 
 ## Cómo funciona el pipeline (`src/renderer.rs`)
@@ -115,6 +116,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
 | Warping animado (rúbrica) | – | ✅ Tab viaja por el espacio sin teletransporte y esquiva lo que tenga en medio | `Ship::warp_step`, `warp_streaks` en `shaders.rs`, FOV en `main.rs` |
+| HUD: ficha del mundo escaneado, destino y radar (claridad del recorrido) | – | ✅ tecla E y 1–5; radar abajo a la derecha dibujado en nuestro framebuffer | `hud.rs`, `Game::draw_overlay` |
 
 ## Uso de IA y recursos externos
 
