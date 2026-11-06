@@ -7,7 +7,8 @@
 //!   - `path(t)`: su movimiento (Superman dando vueltas); si está quieto es la identidad.
 //! Así el personaje acompaña a su planeta mientras éste orbita al sol, sin cálculos extra.
 //!
-//! Los modelos se cargan de assets/heroes/<nombre>.obj (hechos por nosotros en Blender).
+//! Los modelos se cargan de assets/heroes/<nombre>.obj (los arma en Blender el script
+//! assets/heroes/modelar_heroes.py) y se colorean por partes con una paleta (ver palette_color).
 //! Mientras no exista el archivo se usa una figura provisional hecha con cajas.
 
 use crate::math::{Mat4, Vec3};
@@ -31,10 +32,12 @@ const SUPERMAN_BOB: f32 = 0.8;
 const SUPERMAN_BOB_FREQ: f32 = 3.0;
 /// Tamaño del modelo (radio de su esfera envolvente).
 const SUPERMAN_SIZE: f32 = 0.7;
-/// Colores del traje y de la capa (la capa es la parte trasera del modelo, z local > CAPE_Z).
-const SUIT_BLUE: Vec3 = Vec3::new(0.10, 0.25, 0.80);
-const CAPE_RED: Vec3 = Vec3::new(0.85, 0.08, 0.06);
-const CAPE_Z: f32 = 0.25;
+/// Paletas: un color por banda, en el MISMO orden que en assets/heroes/modelar_heroes.py.
+const SKIN: Vec3 = Vec3::new(0.93, 0.72, 0.58);
+const YELLOW: Vec3 = Vec3::new(1.0, 0.82, 0.15);
+const BLACK: Vec3 = Vec3::new(0.05, 0.05, 0.06);
+/// Superman: azul, rojo (capa, botas), piel, amarillo (escudo, cinturón), negro (pelo).
+const SUPERMAN_PALETTE: [Vec3; 5] = [Vec3::new(0.10, 0.25, 0.80), Vec3::new(0.85, 0.08, 0.06), SKIN, YELLOW, BLACK];
 const SUPERMAN_TRAIL: Vec3 = Vec3::new(0.95, 0.25, 0.15);
 
 // --- Flash (corre por el ecuador de Central City) ---
@@ -44,14 +47,15 @@ const CENTRAL_CITY_RADIUS: f32 = 1.2;
 pub const FLASH_SPEED: f32 = 3.0;
 /// Tamaño de Flash (radio de su esfera envolvente).
 const FLASH_SIZE: f32 = 0.16;
-const FLASH_RED: Vec3 = Vec3::new(0.80, 0.06, 0.04);
+/// Flash: rojo, amarillo (rayo, botas, alitas), piel.
+const FLASH_PALETTE: [Vec3; 3] = [Vec3::new(0.80, 0.06, 0.04), YELLOW, SKIN];
 const FLASH_TRAIL: Vec3 = Vec3::new(1.0, 0.85, 0.15);
 
 // --- Batman (quieto en la azotea más alta de Gotham) ---
 /// Tamaño de Batman. Es más grande que un edificio para que se vea desde la nave.
 const BATMAN_SIZE: f32 = 0.22;
-const BATMAN_SUIT: Vec3 = Vec3::new(0.22, 0.22, 0.26);
-const BATMAN_CAPE: Vec3 = Vec3::new(0.04, 0.04, 0.05);
+/// Batman: gris, negro (capa, máscara, botas), amarillo (cinturón, óvalo), piel.
+const BATMAN_PALETTE: [Vec3; 4] = [Vec3::new(0.30, 0.30, 0.34), BLACK, YELLOW, SKIN];
 
 // --- Aquaman montado en una ballena espacial (alrededor de Atlantis) ---
 /// Radio de Atlantis (debe coincidir con scene.rs).
@@ -66,11 +70,15 @@ const WHALE_BOB_FREQ: f32 = 0.8;
 /// Tamaño de la ballena y de Aquaman.
 const WHALE_SIZE: f32 = 1.3;
 const AQUAMAN_SIZE: f32 = 0.22;
-/// Qué tan arriba del centro de la ballena va parado Aquaman (su lomo).
-const WHALE_BACK: f32 = 0.42;
-const WHALE_COLOR: Vec3 = Vec3::new(0.32, 0.42, 0.58);
-const AQUAMAN_ORANGE: Vec3 = Vec3::new(0.95, 0.55, 0.10);
-const AQUAMAN_GREEN: Vec3 = Vec3::new(0.10, 0.55, 0.25);
+/// Qué tan arriba del centro de la ballena va parado Aquaman (su lomo), en múltiplos de su
+/// tamaño: el lomo del modelo está a ~0.27 de su radio envolvente.
+const WHALE_BACK: f32 = 0.27;
+/// Ballena: azul oscuro, vientre claro, negro (ojos), cian (manchas del lomo).
+const WHALE_PALETTE: [Vec3; 4] =
+    [Vec3::new(0.20, 0.28, 0.45), Vec3::new(0.70, 0.76, 0.82), BLACK, Vec3::new(0.3, 0.95, 1.0)];
+/// Aquaman: naranja, verde, piel, rubio, dorado (cinturón y tridente).
+const AQUAMAN_PALETTE: [Vec3; 5] =
+    [Vec3::new(0.95, 0.55, 0.10), Vec3::new(0.10, 0.55, 0.25), SKIN, Vec3::new(0.95, 0.80, 0.35), Vec3::new(1.0, 0.75, 0.2)];
 
 // --- Linterna Verde (flota sobre Oa con un brillo que pulsa) ---
 /// Radio de Oa (debe coincidir con scene.rs).
@@ -86,6 +94,8 @@ pub const LANTERN_PULSE_SPEED: f32 = 3.0;
 const LANTERN_AURA: f32 = 2.4;
 const LANTERN_SIZE: f32 = 0.3;
 const LANTERN_GREEN: Vec3 = Vec3::new(0.15, 1.0, 0.35);
+/// Linterna Verde: verde (brilla), negro, piel, blanco (guantes, ojos, emblema).
+const LANTERN_PALETTE: [Vec3; 4] = [Vec3::new(0.05, 0.45, 0.15), BLACK, SKIN, Vec3::new(0.95, 0.95, 0.95)];
 
 // --- Mujer Maravilla (estatua gigante en Themyscira) ---
 /// Tamaño de la estatua: mucho más grande que los demás, es un monumento.
@@ -295,7 +305,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             name: "Superman",
             home: krypton,
             lods: load_hero("superman", Mesh::placeholder_ship),
-            shader: Arc::new(HeroShader { main: SUIT_BLUE, back: CAPE_RED, back_z: CAPE_Z }),
+            shader: Arc::new(HeroShader { palette: SUPERMAN_PALETTE.to_vec() }),
             path: superman_path,
             place: Mat4::identity(),
             size: SUPERMAN_SIZE,
@@ -309,7 +319,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             name: "Flash",
             home: central_city,
             lods: load_hero("flash", placeholder_figure),
-            shader: Arc::new(HeroShader::solid(FLASH_RED)),
+            shader: Arc::new(HeroShader { palette: FLASH_PALETTE.to_vec() }),
             path: flash_path,
             place: Mat4::identity(),
             size: FLASH_SIZE,
@@ -325,8 +335,8 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             name: "Batman",
             home: gotham,
             lods: load_hero("batman", placeholder_figure),
-            // Traje gris adelante y capa negra atrás.
-            shader: Arc::new(HeroShader { main: BATMAN_SUIT, back: BATMAN_CAPE, back_z: 0.05 }),
+            // Colores por parte (paleta): traje gris, capa negra, cinturón amarillo, piel.
+            shader: Arc::new(HeroShader { palette: BATMAN_PALETTE.to_vec() }),
             path: still,
             place: standing_on(dir, roof, BATMAN_SIZE),
             size: BATMAN_SIZE,
@@ -340,7 +350,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             name: "Ballena",
             home: atlantis,
             lods: load_hero("ballena", placeholder_whale),
-            shader: Arc::new(HeroShader::solid(WHALE_COLOR)),
+            shader: Arc::new(HeroShader { palette: WHALE_PALETTE.to_vec() }),
             path: whale_path,
             place: Mat4::identity(),
             size: WHALE_SIZE,
@@ -352,8 +362,8 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             name: "Aquaman",
             home: atlantis,
             lods: load_hero("aquaman", placeholder_figure),
-            // Camisa naranja adelante, verde atrás (la figura provisional no trae colores).
-            shader: Arc::new(HeroShader { main: AQUAMAN_ORANGE, back: AQUAMAN_GREEN, back_z: 0.05 }),
+            // Colores por parte (paleta): camisa naranja, pantalón verde, piel, pelo, tridente.
+            shader: Arc::new(HeroShader { palette: AQUAMAN_PALETTE.to_vec() }),
             path: aquaman_path,
             place: Mat4::identity(),
             size: AQUAMAN_SIZE,
@@ -422,15 +432,17 @@ fn pulse(time: f32) -> f32 {
     0.7 + 0.3 * (time * LANTERN_PULSE_SPEED).sin()
 }
 
-/// Linterna Verde: traje verde oscuro con Lambert + brillo verde EMISIVO que pulsa
-/// (se ve aunque esté del lado oscuro del planeta).
+/// Linterna Verde: colores de su paleta con Lambert + brillo verde EMISIVO que pulsa en las
+/// partes verdes (banda 0), así se ve aunque esté del lado oscuro del planeta.
 struct LanternShader;
 
 impl FragmentShader for LanternShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
         let l = (u.light_pos - f.world_pos).normalized();
         let diff = f.normal.dot(l).max(0.0);
-        Vec3::new(0.03, 0.18, 0.06) * (0.3 + 0.7 * diff) + LANTERN_GREEN * (0.45 * pulse(u.time))
+        let base = palette_color(&LANTERN_PALETTE, f.uv.0);
+        let glow = if f.uv.0 < 1.0 / LANTERN_PALETTE.len() as f32 { 0.45 * pulse(u.time) } else { 0.0 };
+        base * (0.3 + 0.7 * diff) + LANTERN_GREEN * glow
     }
 }
 
@@ -461,24 +473,23 @@ pub fn draw_creatures(r: &mut Renderer, scene: &Scene, t: f32, creatures: &[Crea
     }
 }
 
-/// Personaje: color principal adelante y otro atrás (la capa), con Blinn-Phong.
-struct HeroShader {
-    main: Vec3,
-    back: Vec3,
-    /// Desde qué z local (hacia atrás, +Z) empieza el segundo color.
-    back_z: f32,
+/// Color de PALETA: en los modelos de modelar_heroes.py cada parte (traje, capa, piel...) tiene
+/// su propia coordenada u = (banda + 0.5) / bandas. Aquí se hace al revés: banda = piso(u · bandas).
+/// Las figuras provisionales traen u = 0, así que salen del primer color.
+fn palette_color(palette: &[Vec3], u: f32) -> Vec3 {
+    let band = ((u * palette.len() as f32).floor() as usize).min(palette.len() - 1);
+    palette[band]
 }
 
-impl HeroShader {
-    /// Un solo color en todo el cuerpo.
-    fn solid(color: Vec3) -> HeroShader {
-        HeroShader { main: color, back: color, back_z: f32::MAX }
-    }
+/// Personaje con varios colores (paleta) iluminado con Blinn-Phong.
+struct HeroShader {
+    /// Un color por banda, en el mismo orden que en modelar_heroes.py.
+    palette: Vec<Vec3>,
 }
 
 impl FragmentShader for HeroShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
-        let base = if f.local_pos.z > self.back_z { self.back } else { self.main };
+        let base = palette_color(&self.palette, f.uv.0);
         let l = (u.light_pos - f.world_pos).normalized();
         let v = (u.camera_pos - f.world_pos).normalized();
         let diff = f.normal.dot(l).max(0.0);

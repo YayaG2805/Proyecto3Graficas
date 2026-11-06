@@ -370,7 +370,7 @@ fn snapshot() {
         };
         let out = (hero - planet).normalized();
         let side = out.cross(Vec3::UP).normalized();
-        let eye = hero + (out * 0.6 + side * 0.8 + Vec3::UP * 0.3) * (size * 8.0);
+        let eye = hero + (out * 0.6 + side * 0.8 + Vec3::UP * 0.3) * (size * PORTRAIT_DISTANCE);
         g.ship.position = eye + (eye - hero).normalized() * 30.0;
         g.camera.position = eye;
         g.camera.target = hero;
@@ -418,6 +418,9 @@ fn snapshot() {
         );
     }
 }
+
+/// Qué tan lejos se pone la cámara en los retratos de los personajes (en múltiplos de su tamaño).
+const PORTRAIT_DISTANCE: f32 = 3.5;
 
 /// Posición de la nave para las tomas del cinturón de asteroides.
 const BELT_SHOT: Vec3 = Vec3::new(0.0, 1.5, 88.0);

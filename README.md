@@ -112,12 +112,12 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Cinturón de asteroides (1500 rocas con semilla fija `ASTEROID_SEED`, 4 formas × 3 LODs, órbita de Kepler) | – | ✅ entre Krypton y Gotham | `exotics.rs` |
 | Cometa en órbita elíptica (ecuación de Kepler con Newton) con cola que siempre apunta lejos del sol | – | ✅ también sale en el radar; la cola crece cerca del sol | `exotics.rs` (`Comet`) |
 | Agujero negro lejano: lente gravitacional `β = θ − θE²/θ`, sombra, anillo de fotones y disco de acreción animado | – | ✅ en el cielo, arriba a la derecha del sol al empezar | `black_hole` en `shaders.rs` (`BH_*`) |
-| Superman: vuela en loops alrededor de Krypton (1.6 radios, sube y baja) con estela que se desvanece | – | 🟡 movimiento y estela listos; falta el modelo de Blender `assets/heroes/superman.obj` (mientras, figura provisional) | `creatures.rs`, `Renderer::draw_line_strip` |
-| Flash: corre por el ecuador de Central City (una vuelta cada ~2 s) con estela amarilla | – | 🟡 movimiento y estela listos; falta `assets/heroes/flash.obj` | `creatures.rs` (`flash_path`) |
-| Batman: quieto en la azotea más alta de Gotham (el vértice más alto de su malla), gira con el planeta | – | 🟡 posición lista; falta `assets/heroes/batman.obj` y la batiseñal de Sando (S8) | `creatures.rs` (`highest_point`, `standing_on`) |
-| Aquaman montado en una ballena espacial que nada lento alrededor de Atlantis (jerarquía: Aquaman = ballena · traslación) | – | 🟡 movimiento listo; faltan `assets/heroes/ballena.obj` y `aquaman.obj` | `creatures.rs` (`whale_path`, `aquaman_path`) |
-| Linterna Verde: flota sobre Oa con brillo verde emisivo y un aura aditiva que pulsan con el tiempo | – | 🟡 movimiento y brillo listos; falta `assets/heroes/linterna_verde.obj` | `creatures.rs` (`lantern_path`, `LanternShader`, `draw_creature_glows`) |
-| Mujer Maravilla: estatua gigante de piedra blanca en la cima de Themyscira | – | 🟡 posición y shader listos; falta `assets/heroes/mujer_maravilla.obj` y el templo de Sando (S7) en ese punto | `creatures.rs` (`StoneShader`) |
+| Superman: vuela en loops alrededor de Krypton (1.6 radios, sube y baja) con estela que se desvanece | – | ✅ modelo `assets/heroes/superman.obj` (544 triángulos + 2 LODs) | `creatures.rs`, `Renderer::draw_line_strip` |
+| Flash: corre por el ecuador de Central City (una vuelta cada ~2 s) con estela amarilla | – | ✅ modelo `flash.obj` (444 triángulos + 2 LODs) | `creatures.rs` (`flash_path`) |
+| Batman: quieto en la azotea más alta de Gotham (el vértice más alto de su malla), gira con el planeta | – | ✅ modelo `batman.obj` (440 triángulos + 2 LODs); falta la batiseñal de Sando (S8) | `creatures.rs` (`highest_point`, `standing_on`) |
+| Aquaman montado en una ballena espacial que nada lento alrededor de Atlantis (jerarquía: Aquaman = ballena · traslación) | – | ✅ modelos `ballena.obj` (628) y `aquaman.obj` (566) + 2 LODs cada uno | `creatures.rs` (`whale_path`, `aquaman_path`) |
+| Linterna Verde: flota sobre Oa con brillo verde emisivo y un aura aditiva que pulsan con el tiempo | – | ✅ modelo `linterna_verde.obj` (692 triángulos + 2 LODs) | `creatures.rs` (`lantern_path`, `LanternShader`, `draw_creature_glows`) |
+| Mujer Maravilla: estatua gigante de piedra blanca en la cima de Themyscira | – | ✅ modelo `mujer_maravilla.obj` (416 triángulos + 2 LODs); falta el templo de Sando (S7) en ese punto | `creatures.rs` (`StoneShader`) |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |
@@ -132,4 +132,8 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 ## Uso de IA y recursos externos
 
 Se usó asistencia de IA (Claude) para la estructura inicial del motor. Todo el código está comentado y el equipo lo revisó y entiende.
+Los modelos de los personajes de la Liga (`assets/heroes/`) se construyen en Blender con el script
+`assets/heroes/modelar_heroes.py` (escrito con ayuda de IA): arma cada personaje con primitivas low-poly,
+lo exporta a `.obj` con dos LODs (Decimate) y guarda su `.blend`. Para regenerarlos:
+`blender --background --python assets/heroes/modelar_heroes.py`.
 Librerías: `raylib` (ventana/entrada/textura), `tobj` (lectura de .obj), `rayon` (paralelismo).
