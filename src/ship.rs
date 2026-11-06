@@ -85,7 +85,7 @@ fn next_spin_rate(rate: f32, input: f32, accel: f32, max: f32, dt: f32) -> f32 {
 }
 
 /// Lo que el jugador presiona este cuadro (main.rs lo llena desde raylib).
-// el allow se quita cuando d2 conecte GameState al loop y estas teclas ya se lean de verdad
+// el allow se quita cuando a5 y a6 lean las teclas q faltan (f y tab)
 #[allow(dead_code)]
 #[derive(Default, Clone, Copy)]
 pub struct ShipInput {

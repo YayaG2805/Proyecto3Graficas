@@ -3,8 +3,6 @@
 //! raylib SOLO se usa para la ventana, leer teclado/mouse, mostrar nuestro framebuffer
 //! como textura 2D y escribir texto del HUD. Todo el 3D lo hace `renderer.rs`.
 
-// el allow se quita cuando d2 conecte GameState al loop
-#[allow(dead_code)]
 mod interaction;
 mod math;
 mod mesh;
@@ -17,6 +15,7 @@ mod shaders;
 mod ship;
 mod texture;
 
+use interaction::GameState;
 use math::{Mat4, Vec3};
 use mesh::Mesh;
 use raylib::prelude::*;
@@ -59,9 +58,10 @@ struct Game {
     time: f32,
     /// Mapeo de normales encendido (tecla N).
     normal_mapping: bool,
-    /// Efecto visual del warp, de 0 a 1. Lo debe llenar la navegación (ship.rs) durante un viaje;
-    /// por ahora se prueba manteniendo Tab.
+    /// Efecto visual del warp, de 0 a 1. Viene de `state.warp` en cada cuadro.
     warp: f32,
+    /// cual mundo esta cerca, el destino, el modo foto... lo actualiza interaction.rs
+    state: GameState,
 }
 
 impl Game {
@@ -112,6 +112,7 @@ impl Game {
             time: 0.0,
             normal_mapping: true,
             warp: 0.0,
+            state: GameState::new(),
         }
     }
 
@@ -140,8 +141,20 @@ impl Game {
     }
 
     fn update(&mut self, input: ShipInput, dt: f32) {
-        self.time += dt;
-        self.ship.update(input, dt, &self.scene, self.time);
+        // paso 1: en modo foto todo se queda congelado, ni el tiempo ni la nave avanzan
+        // como el tiempo no corre, los planetas y los shaders animados tambien se quedan quietos
+        if !self.state.photo_mode {
+            self.time += dt;
+            self.ship.update(input, dt, &self.scene, self.time);
+        }
+
+        // paso 2: esto corre siempre, aun en modo foto, si no la p nunca podria apagarlo
+        interaction::update(&mut self.state, &mut self.ship, &self.scene, &input, self.time, dt);
+
+        // paso 3: el efecto del warp ahora lo decide el estado del juego
+        self.warp = self.state.warp;
+
+        // paso 4: la camara va de ultimo pa q siga a la nave ya en su posicion final del cuadro
         self.camera.update(&self.ship, dt);
     }
 
@@ -299,11 +312,6 @@ fn main() {
             show_help = !show_help;
         }
 
-        // PRUEBA del efecto warp: mantener Tab lo sube hasta 1 y al soltar baja a 0 (suave, con dt).
-        // Cuando la navegación tenga el viaje warp de verdad, ella debe llenar `game.warp`.
-        let warp_target = if rl.is_key_down(KeyboardKey::KEY_TAB) { 1.0 } else { 0.0 };
-        game.warp += (warp_target - game.warp) * (1.0 - (-3.0 * dt).exp());
-
         let input = read_input(&rl);
         game.update(input, dt);
         game.render();
@@ -351,12 +359,66 @@ fn main() {
         );
         if show_help {
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   G gravedad   Tab warp   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   G gravedad   P foto   H ocultar ayuda",
                 10,
                 WINDOW_H - 28,
                 18,
                 Color::GOLD,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_modo_foto_congela_todo_menos_la_camara() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        let press_p = ShipInput { photo: true, ..Default::default() };
+        let accelerate = ShipInput { thrust: 1.0, ..Default::default() };
+
+        // volando normal el tiempo y la nave si avanzan
+        g.update(accelerate, dt);
+        assert!(g.time > 0.0);
+        assert!(g.ship.velocity.length() > 0.0);
+
+        // entramos a modo foto y guardamos como quedo todo
+        g.update(press_p, dt);
+        assert!(g.state.photo_mode);
+        let (time, position) = (g.time, g.ship.position);
+
+        // muevo la camara a otro lado: la nave y el tiempo no se mueven, pero la camara si regresa
+        g.camera.position = position + Vec3::new(50.0, 0.0, 0.0);
+        let camera_before = g.camera.position;
+        for _ in 0..30 {
+            g.update(accelerate, dt);
+        }
+        assert_eq!(g.time, time);
+        assert_eq!((g.ship.position - position).length(), 0.0);
+        assert!((g.camera.position - camera_before).length() > 0.0);
+
+        // con otra p sale del modo foto y todo sigue
+        g.update(press_p, dt);
+        assert!(!g.state.photo_mode);
+        g.update(accelerate, dt);
+        assert!(g.time > time);
+    }
+
+    #[test]
+    fn el_efecto_warp_viene_del_estado_y_no_de_la_tecla() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+
+        // apretar tab solo ya no prende el efecto
+        g.update(ShipInput { warp: true, ..Default::default() }, dt);
+        assert_eq!(g.warp, 0.0);
+
+        // lo q mande es lo q tenga el estado
+        g.state.warp = 0.7;
+        g.update(ShipInput::default(), dt);
+        assert_eq!(g.warp, 0.7);
     }
 }

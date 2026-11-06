@@ -10,6 +10,8 @@ const SCAN_RANGE_RADII: f32 = 3.0;
 // el primer mundo q se elige como destino (bodies[0] es el sol)
 const FIRST_WORLD: usize = 1;
 
+// el allow se quita cuando el hud (d3) y las siguientes tareas lean los campos q faltan
+#[allow(dead_code)]
 pub struct GameState {
     /// cuerpo mas cercano a la nave
     pub nearest: Option<usize>,

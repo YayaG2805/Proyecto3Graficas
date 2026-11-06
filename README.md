@@ -44,7 +44,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | L | Activar/desactivar LOD (para comparar contadores) |
 | O | Mostrar/ocultar las órbitas de los planetas |
 | N | Activar/desactivar el mapeo de normales (para comparar) |
-| Tab (mantener) | Probar el efecto visual del warp |
+| P | Modo foto: congela la simulación |
 | G | Activar/desactivar la gravedad de los planetas y el sol |
 | H | Mostrar/ocultar ayuda |
 
@@ -111,7 +111,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
-| Warping animado (rúbrica) | – | 🟡 efecto visual listo (Tab); falta el viaje | `warp_streaks` en `shaders.rs`, FOV en `main.rs` |
+| Warping animado (rúbrica) | – | 🟡 efecto visual listo; falta el viaje que lo prende | `warp_streaks` en `shaders.rs`, FOV en `main.rs` |
 
 ## Uso de IA y recursos externos
 
