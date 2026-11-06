@@ -83,7 +83,7 @@ src/
   normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
   texture.rs    textura propia (u, v) con interpolación bilineal
   scene.rs      sol y planetas: órbitas, rotación, LODs, posición con jerarquía (lunas)
-  props.rs      objetos sobre la superficie (por ahora solo las estructuras)
+  props.rs      objetos sobre la superficie: scatter (semilla PROP_SEED + ruido) e instance_model (parados sobre la normal)
   ship.rs       nave (física simple, colisión), shader del Halcón y cámara de persecución
   interaction.rs estado del juego: cuerpo más cercano, escaneo, destino del warp, modo foto, cristales coleccionables
 assets/
@@ -122,7 +122,9 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |
 | Atracción gravitatoria | 10 | ✅ tecla G, se ve en el HUD | `Ship::gravity_accel` |
-| Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
+| Distribución procedural reproducible (semilla `PROP_SEED`) | 10 | ✅ cristales en Krypton, árboles en el pasto de Themyscira, edificios en azoteas de Gotham, corales en los arrecifes de Atlantis | `props.rs` (`scatter`), `scene.rs` |
+| Posición y orientación sobre la superficie curva mientras el planeta rota | 5 | ✅ | `props.rs` (`instance_model`), `Body::surface` |
+| Modelos propios sobre la superficie (5 c/u, máx 4) | 20 | 🟡 código listo (carga, LOD, shaders y reparto); faltan los `.obj` de Blender: cristal (Krypton), arbol (Themyscira), edificio (Gotham), coral (Atlantis) | `assets/props/`, `props.rs` (`load_prop_lods`), `scene.rs` |
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
 | Cristales coleccionables (extra) | – | ✅ 2 por mundo con semilla fija, contador en el HUD | `interaction.rs`, `COLLECTIBLE_SEED`, `CrystalShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |

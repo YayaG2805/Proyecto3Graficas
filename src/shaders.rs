@@ -125,7 +125,7 @@ const ATLANTIS_WAVES: [(Vec3, f32, f32, f32); 3] = [
     (Vec3::new(0.19, -0.29, 0.94), 2.6, 0.8, 0.2),
 ];
 /// Desde qué altura del fondo marino (fBm) aparecen arrecifes. Más bajo = más arrecifes.
-const ATLANTIS_REEF_LEVEL: f32 = 0.20;
+pub const ATLANTIS_REEF_LEVEL: f32 = 0.20;
 /// Brillo del sol en las olas (Blinn-Phong): intensidad y dureza.
 const ATLANTIS_SPEC: f32 = 1.0;
 const ATLANTIS_SHININESS: f32 = 220.0;
@@ -540,6 +540,12 @@ impl FragmentShader for GothamShader {
 //   4. Luz: Lambert + Blinn-Phong con la normal de las olas → el reflejo del sol brilla y se
 //      mueve; borde (fresnel) con el color del cielo, como el agua vista de lado.
 // ---------------------------------------------------------------------------
+/// "Altura" del fondo marino de Atlantis en la dirección `dir` (fija, no cambia con el tiempo).
+/// Donde supera ATLANTIS_REEF_LEVEL hay arrecifes: la usan el shader y el reparto de corales.
+pub fn atlantis_seabed(dir: Vec3, seed: u32) -> f32 {
+    fbm(dir * 2.5, 4, seed)
+}
+
 pub struct AtlantisShader {
     pub seed: u32,
 }
@@ -576,7 +582,7 @@ impl FragmentShader for AtlantisShader {
         };
 
         // --- 3. Color: profundidad y arrecifes ---
-        let seabed = fbm(dir * 2.5, 4, self.seed); // "altura" del fondo marino (fija)
+        let seabed = atlantis_seabed(dir, self.seed); // "altura" del fondo marino (fija)
         let mut water = mix(ATLANTIS_DEEP, ATLANTIS_SHALLOW, smoothstep(-0.05, 0.25, seabed));
         let reef = smoothstep(ATLANTIS_REEF_LEVEL, ATLANTIS_REEF_LEVEL + 0.05, seabed);
         if reef > 0.0 {
@@ -720,6 +726,116 @@ impl FragmentShader for CentralCityShader {
         // Rayos: se SUMAN (emisivos), así brillan también del lado oscuro.
         let glow: f32 = (0..CC_BOLTS).map(|i| self.bolt(i, p, u.time)).sum();
         rock + CC_BOLT_GLOW * glow + CC_BOLT_CORE * (glow * glow * 0.5)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MODELOS DE SUPERFICIE (S7). Cada uno recibe `height` (alto del modelo en el mundo) para
+// saber qué tan arriba está cada píxel: t = local_pos.y / height va de 0 (base) a 1 (punta).
+// ---------------------------------------------------------------------------
+
+/// CRISTALES de Krypton: azul emisivo (más claro hacia la punta) con bordes rojos.
+/// Los "bordes" son las caras que se ven de lado: (1 − |n·v|)² → como las venas del planeta.
+pub struct CrystalPropShader {
+    pub height: f32,
+}
+
+impl FragmentShader for CrystalPropShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let t = (f.local_pos.y / self.height).clamp(0.0, 1.0);
+        let l = (u.light_pos - f.world_pos).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let h = (l + v).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        let spec = f.normal.dot(h).max(0.0).powf(80.0) * 1.2;
+        let base = mix(KRYPTON_DEEP_BLUE, KRYPTON_CYAN, t);
+        let glow = KRYPTON_CYAN * (0.2 + 0.35 * t); // luz propia: se ve también de noche
+        let edge = (1.0 - f.normal.dot(v).abs()).powf(2.0);
+        base * (0.1 + 0.9 * diff) + Vec3::splat(spec) + glow + KRYPTON_VEIN_RED * (edge * 1.3)
+    }
+}
+
+/// ÁRBOLES de Themyscira: tronco café abajo y en el centro, copa verde olivo con manchas.
+const TREE_TRUNK_TOP: f32 = 0.35; // hasta qué fracción del alto puede haber tronco
+const TREE_TRUNK_RADIUS: f32 = 0.12; // qué tan lejos del eje (en fracción del alto) es tronco
+const TREE_TRUNK: Vec3 = Vec3::new(0.30, 0.20, 0.12);
+const TREE_LEAVES_DARK: Vec3 = Vec3::new(0.16, 0.28, 0.10);
+const TREE_LEAVES: Vec3 = Vec3::new(0.32, 0.48, 0.18);
+
+pub struct TreePropShader {
+    pub height: f32,
+}
+
+impl FragmentShader for TreePropShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let p = f.local_pos;
+        let t = (p.y / self.height).clamp(0.0, 1.0);
+        let from_axis = (p.x * p.x + p.z * p.z).sqrt() / self.height;
+        let color = if t < TREE_TRUNK_TOP && from_axis < TREE_TRUNK_RADIUS {
+            TREE_TRUNK
+        } else {
+            let leaf = fbm(p * (25.0 / self.height), 2, 5) * 0.5 + 0.5;
+            mix(TREE_LEAVES_DARK, TREE_LEAVES, leaf) * (0.85 + 0.3 * t) // la punta recibe más sol
+        };
+        color * lambert(f, u, 0.08)
+    }
+}
+
+/// EDIFICIOS de Gotham: concreto con una cuadrícula de ventanas en las fachadas.
+/// De día el vidrio es oscuro; de noche (igual que el planeta) algunas ventanas se encienden
+/// y cambian cada pocos segundos.
+const TOWER_FLOORS: f32 = 10.0; // pisos a lo alto del modelo
+const TOWER_COLUMNS: f32 = 14.0; // ventanas a lo ancho (por unidad de alto)
+
+pub struct TowerPropShader {
+    pub height: f32,
+    pub seed: u32,
+}
+
+impl FragmentShader for TowerPropShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let p = f.local_pos;
+        let l = (u.light_pos - f.world_pos).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        let night = 1.0 - smoothstep(GOTHAM_NIGHT - 0.08, GOTHAM_NIGHT + 0.08, diff);
+        let light = GOTHAM_AMBIENT + (1.0 - GOTHAM_AMBIENT) * diff;
+
+        // Cuadrícula de ventanas: columnas a lo largo de x + z, pisos a lo largo de y.
+        let wx = (p.x + p.z) / self.height * TOWER_COLUMNS;
+        let wy = p.y / self.height * TOWER_FLOORS;
+        let (cx, cy) = (wx - wx.floor(), wy - wy.floor());
+        let top = p.y / self.height > 0.97; // la azotea no lleva ventanas
+        let glass = !top && cx > 0.25 && cx < 0.75 && cy > 0.3 && cy < 0.8;
+        if !glass {
+            return GOTHAM_CONCRETE * light;
+        }
+        let id = (wx.floor() as i32, wy.floor() as i32);
+        let phase = hash01(id.0, id.1, 2, self.seed) * 10.0;
+        let epoch = (u.time * GOTHAM_FLICKER_SPEED + phase).floor() as i32;
+        let on = hash01(id.0, id.1, epoch, self.seed.wrapping_add(3)) < GOTHAM_WINDOW_DENSITY;
+        let emit = if on { GOTHAM_WINDOW * 0.8 } else { Vec3::ZERO };
+        GOTHAM_GLASS * light + emit * night
+    }
+}
+
+/// CORALES de Atlantis: de rosado en la base a naranja en las puntas, con manchas.
+const CORAL_PINK: Vec3 = Vec3::new(0.80, 0.42, 0.52);
+const CORAL_ORANGE: Vec3 = Vec3::new(0.92, 0.55, 0.30);
+
+pub struct CoralPropShader {
+    pub height: f32,
+}
+
+impl FragmentShader for CoralPropShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let p = f.local_pos;
+        let t = (p.y / self.height).clamp(0.0, 1.0);
+        let spots = fbm(p * (30.0 / self.height), 2, 11) * 0.3;
+        let color = mix(CORAL_PINK, CORAL_ORANGE, t + spots);
+        // Un poco de luz "que atraviesa" en los bordes, como un material blando.
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let rim = (1.0 - f.normal.dot(v).abs()).powf(3.0) * 0.25;
+        color * lambert(f, u, 0.12) + CORAL_PINK * rim
     }
 }
 

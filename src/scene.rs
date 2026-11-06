@@ -5,11 +5,17 @@ use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
 use crate::noise::fbm;
 use crate::normal_map::NormalMap;
-use crate::props::{instance_model, PropInstance, PropKind};
+use crate::props::{
+    instance_model, load_prop_lods, scatter, test_pyramid, PropInstance, PropKind, PROPS_DIR, PROP_SEED,
+};
 use crate::renderer::{FragmentShader, Renderer};
 use crate::shaders::{
     gotham_height, themyscira_elevation, AtlantisShader, CentralCityShader, GothamShader, KryptonShader, OaShader,
     OrbitShader, SunShader, ThemysciraShader,
+};
+use crate::shaders::{
+    atlantis_seabed, gotham_cell, CoralPropShader, CrystalPropShader, GothamKind, TowerPropShader, TreePropShader,
+    ATLANTIS_REEF_LEVEL,
 };
 use std::sync::Arc;
 
@@ -67,6 +73,21 @@ const CENTRAL_CITY_SEED: u32 = 69;
 /// Relieve de los cráteres, en fracción del radio.
 const CENTRAL_CITY_RELIEF: f32 = 0.05;
 
+// --- Objetos de superficie (S6 + S7). La semilla PROP_SEED está en props.rs ---
+// Cada modelo se carga de assets/props/<archivo>.obj; si todavía no existe, se usa una pirámide.
+// Alto de cada modelo en el mundo (el .obj se escala a esta medida) y cuántos hay.
+const CRYSTAL_HEIGHT: f32 = 0.55;
+const CRYSTAL_COUNT: usize = 60;
+const TREE_HEIGHT: f32 = 0.5;
+const TREE_COUNT: usize = 60;
+const TOWER_HEIGHT: f32 = 0.45;
+const TOWER_COUNT: usize = 120;
+const CORAL_HEIGHT: f32 = 0.3;
+const CORAL_COUNT: usize = 80;
+/// En Themyscira los árboles van en el pasto: sobre la playa y debajo de la piedra.
+const THEMYSCIRA_PROP_MIN_ELEVATION: f32 = 0.03;
+const THEMYSCIRA_PROP_MAX_ELEVATION: f32 = 0.15;
+
 /// la ficha de un mundo, lo q se ve en el hud cuando lo escaneas
 pub struct PlanetInfo {
     pub title: &'static str,
@@ -95,6 +116,9 @@ pub struct Body {
     pub spin_speed: f32,
     /// Inclinación del eje (radianes).
     pub tilt: f32,
+    /// Forma de la superficie: radio relativo (1 = esfera) en cada dirección. Es la MISMA
+    /// función que deforma la malla, así los objetos de superficie quedan sobre el terreno.
+    pub surface: fn(Vec3) -> f32,
     /// Niveles de detalle: [0] = más detallado. Se elige según la distancia.
     pub lods: Vec<Mesh>,
     pub shader: Arc<dyn FragmentShader>,
@@ -118,6 +142,24 @@ impl Body {
             .map(|i| self.orbit_point(i as f32 / ORBIT_SEGMENTS as f32 * std::f32::consts::TAU))
             .collect()
     }
+}
+
+// --- Formas de la superficie de cada cuerpo (radio relativo en cada dirección) ---
+// Se usan para deformar la malla Y para saber a qué altura poner los objetos de superficie.
+fn themyscira_surface(d: Vec3) -> f32 {
+    1.0 + themyscira_elevation(d, THEMYSCIRA_SEED).max(0.0) * THEMYSCIRA_RELIEF
+}
+fn krypton_surface(d: Vec3) -> f32 {
+    1.0 + krypton_ridge(d) * KRYPTON_RELIEF
+}
+fn gotham_surface(d: Vec3) -> f32 {
+    1.0 + gotham_height(d, GOTHAM_SEED) * GOTHAM_BUILDING_HEIGHT
+}
+fn oa_surface(d: Vec3) -> f32 {
+    1.0 + fbm(d * 4.0, 3, OA_SEED) * OA_RELIEF
+}
+fn central_city_surface(d: Vec3) -> f32 {
+    1.0 + fbm(d * 3.0, 3, CENTRAL_CITY_SEED) * CENTRAL_CITY_RELIEF
 }
 
 /// Genera las mallas de LOD de una esfera (opcionalmente deformada).
@@ -153,6 +195,7 @@ impl Scene {
             orbit_phase: 0.0,
             spin_speed: 0.05,
             tilt: 0.0,
+            surface: |_| 1.0,
             lods: sphere_lods(&|_| 1.0),
             shader: Arc::new(SunShader { seed: 1, speed: 0.15 }),
         };
@@ -176,7 +219,8 @@ impl Scene {
             orbit_phase: 0.0,
             spin_speed: 0.25,
             tilt: 0.3,
-            lods: sphere_lods(&|d| 1.0 + themyscira_elevation(d, THEMYSCIRA_SEED).max(0.0) * THEMYSCIRA_RELIEF),
+            surface: themyscira_surface,
+            lods: sphere_lods(&themyscira_surface),
             shader: Arc::new(ThemysciraShader {
                 seed: THEMYSCIRA_SEED,
                 // Mapa de normales 512x256: frecuencia 10 (tamaño de las rocas), relieve 3% del radio.
@@ -203,7 +247,8 @@ impl Scene {
             orbit_phase: 2.4, // distinta a Themyscira para que no queden alineados
             spin_speed: 0.18,
             tilt: 0.15,
-            lods: sphere_lods(&|d| 1.0 + krypton_ridge(d) * KRYPTON_RELIEF),
+            surface: krypton_surface,
+            lods: sphere_lods(&krypton_surface),
             shader: Arc::new(KryptonShader { seed: KRYPTON_SEED }),
         };
 
@@ -225,7 +270,8 @@ impl Scene {
             orbit_phase: 4.4, // distinta a los demás para que no queden alineados
             spin_speed: 0.12,
             tilt: 0.2,
-            lods: sphere_lods(&|d| 1.0 + gotham_height(d, GOTHAM_SEED) * GOTHAM_BUILDING_HEIGHT),
+            surface: gotham_surface,
+            lods: sphere_lods(&gotham_surface),
             shader: Arc::new(GothamShader { seed: GOTHAM_SEED }),
         };
 
@@ -247,6 +293,7 @@ impl Scene {
             orbit_phase: 0.9, // distinta a los demás para que no queden alineados
             spin_speed: 0.1,
             tilt: 0.25,
+            surface: |_| 1.0,
             lods: sphere_lods(&|_| 1.0),
             shader: Arc::new(AtlantisShader { seed: ATLANTIS_SEED }),
         };
@@ -269,7 +316,8 @@ impl Scene {
             orbit_phase: 3.3, // distinta a los demás para que no queden alineados
             spin_speed: 0.3,
             tilt: 0.1,
-            lods: sphere_lods(&|d| 1.0 + fbm(d * 4.0, 3, OA_SEED) * OA_RELIEF),
+            surface: oa_surface,
+            lods: sphere_lods(&oa_surface),
             shader: Arc::new(OaShader { seed: OA_SEED }),
         };
 
@@ -296,13 +344,56 @@ impl Scene {
             orbit_phase: 0.0,
             spin_speed: 0.4,
             tilt: 0.0,
-            lods: sphere_lods(&|d| 1.0 + fbm(d * 3.0, 3, CENTRAL_CITY_SEED) * CENTRAL_CITY_RELIEF),
+            surface: central_city_surface,
+            lods: sphere_lods(&central_city_surface),
             shader: Arc::new(CentralCityShader { seed: CENTRAL_CITY_SEED }),
+        });
+
+        // OBJETOS DE SUPERFICIE (S6 + S7): un tipo de modelo por mundo, repartido con scatter.
+        // Cada planeta usa una semilla derivada de PROP_SEED para no repetir el mismo patrón.
+        let pyramid = test_pyramid();
+        let mut prop_kinds: Vec<PropKind> = Vec::new();
+        // Carga el modelo de Blender (con su LOD); si todavía no existe, usa la pirámide de prueba.
+        let mut add_kind = |name: &'static str, file: &str, height: f32, shader: Arc<dyn FragmentShader>| {
+            let lods = load_prop_lods(file, height).unwrap_or_else(|| {
+                eprintln!("Falta {PROPS_DIR}/{file}.obj: se usa la pirámide de prueba");
+                vec![pyramid.clone(), pyramid.clone()]
+            });
+            prop_kinds.push(PropKind { name, lods, shader });
+            prop_kinds.len() - 1 // su índice en prop_kinds
+        };
+        let crystal = add_kind("Cristales", "cristal", CRYSTAL_HEIGHT, Arc::new(CrystalPropShader { height: CRYSTAL_HEIGHT }));
+        let tree = add_kind("Árboles", "arbol", TREE_HEIGHT, Arc::new(TreePropShader { height: TREE_HEIGHT }));
+        let tower = add_kind(
+            "Edificios",
+            "edificio",
+            TOWER_HEIGHT,
+            Arc::new(TowerPropShader { height: TOWER_HEIGHT, seed: GOTHAM_SEED }),
+        );
+        let coral = add_kind("Corales", "coral", CORAL_HEIGHT, Arc::new(CoralPropShader { height: CORAL_HEIGHT }));
+
+        let index_of = |name: &str| bodies.iter().position(|b| b.name == name).expect("falta un mundo");
+        let (themyscira_i, krypton_i) = (index_of("Themyscira"), index_of("Krypton"));
+        let (gotham_i, atlantis_i) = (index_of("Gotham"), index_of("Atlantis"));
+        // Krypton: cristales en cualquier parte.
+        bodies[krypton_i].props = scatter(PROP_SEED.wrapping_add(1), CRYSTAL_COUNT, crystal, &|_| true);
+        // Themyscira: árboles solo en el pasto (ni en el mar, ni en la playa, ni en la piedra).
+        bodies[themyscira_i].props = scatter(PROP_SEED, TREE_COUNT, tree, &|d| {
+            let e = themyscira_elevation(d, THEMYSCIRA_SEED);
+            e > THEMYSCIRA_PROP_MIN_ELEVATION && e < THEMYSCIRA_PROP_MAX_ELEVATION
+        });
+        // Gotham: edificios solo sobre azoteas (no en calles, carreteras, parques ni agua).
+        bodies[gotham_i].props = scatter(PROP_SEED.wrapping_add(2), TOWER_COUNT, tower, &|d| {
+            gotham_cell(d, GOTHAM_SEED).kind == GothamKind::Roof
+        });
+        // Atlantis: corales solo donde el fondo marino sube (las mismas zonas de arrecife del shader).
+        bodies[atlantis_i].props = scatter(PROP_SEED.wrapping_add(3), CORAL_COUNT, coral, &|d| {
+            atlantis_seabed(d, ATLANTIS_SEED) > ATLANTIS_REEF_LEVEL
         });
 
         Scene {
             bodies,
-            prop_kinds: Vec::new(),
+            prop_kinds,
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),
         }
@@ -339,8 +430,8 @@ impl Scene {
             let frame = self.body_frame(i, t);
             for p in &b.props {
                 let kind = &self.prop_kinds[p.kind];
-                // TODO(Sando): pasar el radio con la deformacion del planeta en esa direccion
-                let model = instance_model(&frame, b.radius, p);
+                // radio de la superficie en esa dirección (con montañas, crestas o edificios)
+                let model = instance_model(&frame, b.radius * (b.surface)(p.dir), p);
                 r.draw_lods(&kind.lods, &model, kind.shader.clone());
             }
         }
