@@ -3,6 +3,9 @@
 //! raylib SOLO se usa para la ventana, leer teclado/mouse, mostrar nuestro framebuffer
 //! como textura 2D y escribir texto del HUD. Todo el 3D lo hace `renderer.rs`.
 
+// el allow se quita cuando d2 conecte GameState al loop
+#[allow(dead_code)]
+mod interaction;
 mod math;
 mod mesh;
 mod noise;
@@ -237,7 +240,27 @@ fn read_input(rl: &RaylibHandle) -> ShipInput {
         climb: axis(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN),
         boost: rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT),
         brake: rl.is_key_down(KeyboardKey::KEY_SPACE),
+        // las de un toque van con is_key_pressed, asi no se repiten mientras la tecla sigue abajo
+        orbit_toggle: rl.is_key_pressed(KeyboardKey::KEY_F),
+        scan: rl.is_key_pressed(KeyboardKey::KEY_E),
+        warp: rl.is_key_pressed(KeyboardKey::KEY_TAB),
+        select: read_world_key(rl),
+        photo: rl.is_key_pressed(KeyboardKey::KEY_P),
+        gravity_toggle: rl.is_key_pressed(KeyboardKey::KEY_G),
     }
+}
+
+// revisa las teclas 1 a 5 y devuelve el numero de la q se acaba de apretar
+fn read_world_key(rl: &RaylibHandle) -> Option<usize> {
+    let keys = [
+        KeyboardKey::KEY_ONE,
+        KeyboardKey::KEY_TWO,
+        KeyboardKey::KEY_THREE,
+        KeyboardKey::KEY_FOUR,
+        KeyboardKey::KEY_FIVE,
+    ];
+    // la tecla 1 esta en la posicion 0 de la lista, por eso el + 1
+    keys.iter().position(|&key| rl.is_key_pressed(key)).map(|i| i + 1)
 }
 
 fn main() {

@@ -78,6 +78,8 @@ fn next_spin_rate(rate: f32, input: f32, accel: f32, max: f32, dt: f32) -> f32 {
 }
 
 /// Lo que el jugador presiona este cuadro (main.rs lo llena desde raylib).
+// el allow se quita cuando d2 conecte GameState al loop y estas teclas ya se lean de verdad
+#[allow(dead_code)]
 #[derive(Default, Clone, Copy)]
 pub struct ShipInput {
     pub thrust: f32, // -1..1  (W / S)
@@ -85,6 +87,13 @@ pub struct ShipInput {
     pub climb: f32,  // -1..1  (flechas arriba/abajo)
     pub boost: bool, // Shift
     pub brake: bool, // Espacio
+    // estas son de un toque: solo valen true en el cuadro en q se aprieta la tecla
+    pub orbit_toggle: bool,    // F
+    pub scan: bool,            // E
+    pub warp: bool,            // Tab
+    pub select: Option<usize>, // teclas 1 a 5, 1 = bodies[1]
+    pub photo: bool,           // P
+    pub gravity_toggle: bool,  // G
 }
 
 impl Ship {

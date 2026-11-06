@@ -80,6 +80,7 @@ src/
   scene.rs      sol y planetas: órbitas, rotación, LODs, posición con jerarquía (lunas)
   props.rs      objetos sobre la superficie (por ahora solo las estructuras)
   ship.rs       nave (física simple, colisión), shader del Halcón y cámara de persecución
+  interaction.rs estado del juego: cuerpo más cercano, escaneo, destino del warp, modo foto
 assets/
   Halcon_Milenario.obj / .mtl / .blend   nave actual: Halcón Milenario low-poly (1680 triángulos)
   nave.obj / nave.mtl / nave.blend   primera nave, modelada en Blender (respaldo si falla la carga del Halcón)
