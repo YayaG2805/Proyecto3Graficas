@@ -96,7 +96,20 @@ const GOTHAM_TRAFFIC_DENSITY: f32 = 0.35;
 /// Por debajo de esta luz del sol (Lambert) se considera de noche y se encienden las luces.
 const GOTHAM_NIGHT: f32 = 0.15;
 /// Luz ambiente muy baja: la ciudad casi siempre se ve de noche.
-const GOTHAM_AMBIENT: f32 = 0.03;
+const GOTHAM_AMBIENT: f32 = 0.06;
+/// Materiales de las azoteas: ladrillo, pizarra, piedra arenisca y cobre viejo (verde).
+const GOTHAM_ROOFS: [Vec3; 4] = [
+    Vec3::new(0.30, 0.20, 0.17),
+    Vec3::new(0.22, 0.23, 0.27),
+    Vec3::new(0.33, 0.30, 0.26),
+    Vec3::new(0.18, 0.26, 0.24),
+];
+/// Qué tanto brillan de día las ventanas encendidas (0 = nada, 1 = como de noche).
+const GOTHAM_DAY_WINDOWS: f32 = 0.25;
+/// Fuerza del smog del borde y sus colores de día y de noche.
+const GOTHAM_SMOG: f32 = 0.55;
+const GOTHAM_SMOG_DAY: Vec3 = Vec3::new(0.45, 0.48, 0.55);
+const GOTHAM_SMOG_NIGHT: Vec3 = Vec3::new(0.55, 0.30, 0.12);
 const GOTHAM_CONCRETE: Vec3 = Vec3::new(0.30, 0.30, 0.33);
 const GOTHAM_GLASS: Vec3 = Vec3::new(0.06, 0.07, 0.09);
 const GOTHAM_ASPHALT: Vec3 = Vec3::new(0.07, 0.07, 0.08);
@@ -181,6 +194,30 @@ const CC_BOLT_JAG_FREQ: f32 = 9.0;
 const CC_ROCK_DARK: Vec3 = Vec3::new(0.16, 0.15, 0.17);
 const CC_ROCK_LIGHT: Vec3 = Vec3::new(0.38, 0.36, 0.33);
 const CC_BOLT_CORE: Vec3 = Vec3::new(1.0, 0.97, 0.75);
+// Ciudad de Central City.
+/// Manzanas alrededor (u) y de polo a polo (v), y qué tan cerca de los polos llega la ciudad.
+const CC_BLOCKS_U: f32 = 44.0;
+const CC_BLOCKS_V: f32 = 22.0;
+const CC_POLAR_LIMIT: f32 = 1.15;
+/// Ancho de las calles (fracción de la manzana) y cada cuántas manzanas hay una avenida.
+const CC_STREET: f32 = 0.18;
+const CC_AVENUE_EVERY: i32 = 4;
+/// Velocidad de las estelas de las avenidas y fracción de ventanas encendidas.
+const CC_STREAK_SPEED: f32 = 6.0;
+const CC_WINDOW_DENSITY: f32 = 0.5;
+/// Ventanas por lado de cada manzana.
+const CC_WINDOWS: f32 = 4.0;
+/// Materiales de las manzanas: concreto claro, vidrio azul, arena y ladrillo rojo (Flash).
+const CC_ROOFS: [Vec3; 4] = [
+    Vec3::new(0.70, 0.70, 0.72),
+    Vec3::new(0.36, 0.46, 0.60),
+    Vec3::new(0.62, 0.56, 0.46),
+    Vec3::new(0.55, 0.30, 0.24),
+];
+const CC_ASPHALT: Vec3 = Vec3::new(0.12, 0.12, 0.13);
+const CC_STREET_GLOW: Vec3 = Vec3::new(1.0, 0.72, 0.25);
+const CC_STREAK: Vec3 = Vec3::new(1.0, 0.85, 0.35);
+const CC_WINDOW: Vec3 = Vec3::new(1.0, 0.90, 0.65);
 const CC_BOLT_GLOW: Vec3 = Vec3::new(1.0, 0.78, 0.10);
 
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
@@ -476,7 +513,13 @@ impl FragmentShader for GothamShader {
         let night = 1.0 - smoothstep(GOTHAM_NIGHT - 0.08, GOTHAM_NIGHT + 0.08, diff);
         let grime = 0.8 + 0.2 * fbm(dir * 40.0, 2, self.seed); // manchas de hollín
 
-        match c.kind {
+        // SMOG: neblina en el borde del planeta (donde lo vemos de lado, 1 − n·v), naranja de
+        // noche por las luces de la ciudad y gris azulado de día. Le da silueta y "aire" a Gotham.
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let edge = (1.0 - f.normal.dot(v).max(0.0)).powf(2.5);
+        let haze = mix(GOTHAM_SMOG_DAY * diff, GOTHAM_SMOG_NIGHT, night) * (edge * GOTHAM_SMOG);
+
+        let color = match c.kind {
             GothamKind::Water => {
                 // Agua casi negra con un reflejo pequeño del sol (solo de día).
                 let v = (u.camera_pos - f.world_pos).normalized();
@@ -509,8 +552,12 @@ impl FragmentShader for GothamShader {
                 // Marco: solo el centro de cada celda es vidrio (deja un borde de concreto).
                 let (cx, cy) = (wx - wx.floor(), wy - wy.floor());
                 let glass = cx > 0.2 && cx < 0.8 && cy > 0.2 && cy < 0.8;
-                let tone = hash01(c.id.0, c.id.1, 1, self.seed); // gris propio de cada manzana
-                let surface = if glass { GOTHAM_GLASS } else { GOTHAM_CONCRETE * (0.6 + 0.6 * tone) * grime };
+                // Cada manzana elige un material de la paleta gótica (ladrillo, pizarra, piedra,
+                // cobre viejo) y un brillo propio; el vidrio es una versión oscura del mismo tono.
+                let tone = hash01(c.id.0, c.id.1, 1, self.seed);
+                let pick = (hash01(c.id.0, c.id.1, 6, self.seed) * GOTHAM_ROOFS.len() as f32) as usize;
+                let roof = GOTHAM_ROOFS[pick.min(GOTHAM_ROOFS.len() - 1)] * (0.6 + 0.5 * tone) * grime;
+                let surface = if glass { roof * 0.35 + GOTHAM_GLASS } else { roof };
 
                 // Ventanas encendidas: cada una "tira el dado" en momentos distintos (fase propia).
                 let wid = (c.id.0 * 16 + wx.floor() as i32, c.id.1 * 16 + wy.floor() as i32);
@@ -518,9 +565,11 @@ impl FragmentShader for GothamShader {
                 let epoch = (u.time * GOTHAM_FLICKER_SPEED + phase).floor() as i32;
                 let on = glass && hash01(wid.0, wid.1, epoch, self.seed.wrapping_add(3)) < GOTHAM_WINDOW_DENSITY;
                 let emit = if on { GOTHAM_WINDOW * (0.6 + 0.4 * hash01(wid.0, wid.1, 4, self.seed)) } else { Vec3::ZERO };
-                surface * light + emit * night
+                // De día también hay unas pocas luces prendidas (más tenues): la ciudad nunca duerme.
+                surface * light + emit * (GOTHAM_DAY_WINDOWS + (1.0 - GOTHAM_DAY_WINDOWS) * night)
             }
-        }
+        };
+        color + haze
     }
 }
 
@@ -717,15 +766,66 @@ impl CentralCityShader {
     }
 }
 
+impl CentralCityShader {
+    /// La CIUDAD sobre la luna: manzanas modernas con calles y avenidas, igual que Gotham pero
+    /// clara y dorada (la "ciudad de la velocidad"). Devuelve el color ya iluminado.
+    ///   - Manzanas: cuadrícula en (u, v) de la esfera; cada una elige material por hash.
+    ///   - De noche: calles doradas, ventanas encendidas y en las avenidas "estelas de velocidad"
+    ///     que corren (franjas que avanzan con el tiempo, como Flash).
+    fn city(&self, p: Vec3, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let l = (u.light_pos - f.world_pos).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        let light = 0.08 + 0.92 * diff;
+        let night = 1.0 - smoothstep(0.05, 0.25, diff);
+
+        // Polos: roca (ahí no hay ciudad), con los dos tonos de antes.
+        if p.y.clamp(-1.0, 1.0).asin().abs() > CC_POLAR_LIMIT {
+            let n = fbm(p * 5.0, 4, self.seed) * 0.5 + 0.5;
+            return mix(CC_ROCK_DARK, CC_ROCK_LIGHT, smoothstep(0.35, 0.7, n)) * light;
+        }
+        let (su, sv) = sphere_uv(p);
+        let (bu, bv) = (su * CC_BLOCKS_U, sv * CC_BLOCKS_V);
+        let id = ((bu.floor() as i32).rem_euclid(CC_BLOCKS_U as i32), bv.floor() as i32);
+        let (fu, fv) = (bu - bu.floor(), bv - bv.floor());
+        let half = CC_STREET * 0.5;
+        let street = fu < half || fu > 1.0 - half || fv < half || fv > 1.0 - half;
+
+        if street {
+            // ¿Es avenida? (cada CC_AVENUE_EVERY manzanas). Sus estelas avanzan a lo largo de u o v.
+            let along_u = id.1 % CC_AVENUE_EVERY == 0 && fv < half;
+            let along_v = id.0 % CC_AVENUE_EVERY == 0 && fu < half;
+            let mut lights = CC_STREET_GLOW * 0.35;
+            if along_u || along_v {
+                let along = if along_u { bu } else { bv };
+                let s = along * 3.0 - u.time * CC_STREAK_SPEED;
+                let streak = (s - s.floor()).powf(6.0); // pico brillante + cola que se apaga
+                lights = lights + CC_STREAK * streak;
+            }
+            return CC_ASPHALT * light + lights * (0.15 + 0.85 * night);
+        }
+
+        // Manzana: material (concreto claro, vidrio azul o arena) y ventanas en cuadrícula.
+        let pick = (hash01(id.0, id.1, 1, self.seed) * CC_ROOFS.len() as f32) as usize;
+        let roof = CC_ROOFS[pick.min(CC_ROOFS.len() - 1)];
+        let (ru, rv) = ((fu - half) / (1.0 - CC_STREET), (fv - half) / (1.0 - CC_STREET));
+        let (wx, wy) = (ru * CC_WINDOWS, rv * CC_WINDOWS);
+        let (cx, cy) = (wx - wx.floor(), wy - wy.floor());
+        let glass = cx > 0.2 && cx < 0.8 && cy > 0.2 && cy < 0.8;
+        let surface = if glass { roof * 0.45 } else { roof };
+        let wid = (id.0 * 8 + wx.floor() as i32, id.1 * 8 + wy.floor() as i32);
+        let on = glass && hash01(wid.0, wid.1, 3, self.seed) < CC_WINDOW_DENSITY;
+        let emit = if on { CC_WINDOW } else { Vec3::ZERO };
+        surface * light + emit * night
+    }
+}
+
 impl FragmentShader for CentralCityShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
         let p = f.local_pos.normalized(); // gira con la luna
-        // Roca: dos tonos mezclados con ruido + Lambert.
-        let n = fbm(p * 5.0, 4, self.seed) * 0.5 + 0.5;
-        let rock = mix(CC_ROCK_DARK, CC_ROCK_LIGHT, smoothstep(0.35, 0.7, n)) * lambert(f, u, 0.08);
+        let ground = self.city(p, f, u);
         // Rayos: se SUMAN (emisivos), así brillan también del lado oscuro.
         let glow: f32 = (0..CC_BOLTS).map(|i| self.bolt(i, p, u.time)).sum();
-        rock + CC_BOLT_GLOW * glow + CC_BOLT_CORE * (glow * glow * 0.5)
+        ground + CC_BOLT_GLOW * glow + CC_BOLT_CORE * (glow * glow * 0.5)
     }
 }
 
@@ -786,6 +886,9 @@ impl FragmentShader for TreePropShader {
 /// y cambian cada pocos segundos.
 const TOWER_FLOORS: f32 = 10.0; // pisos a lo alto del modelo
 const TOWER_COLUMNS: f32 = 14.0; // ventanas a lo ancho (por unidad de alto)
+const TOWER_BEACON_START: f32 = 0.93; // desde qué fracción del alto empieza la luz roja
+const TOWER_BEACON_SPEED: f32 = 3.0; // parpadeos (en radianes por segundo)
+const TOWER_BEACON: Vec3 = Vec3::new(1.0, 0.12, 0.06);
 
 pub struct TowerPropShader {
     pub height: f32,
@@ -804,17 +907,26 @@ impl FragmentShader for TowerPropShader {
         let wx = (p.x + p.z) / self.height * TOWER_COLUMNS;
         let wy = p.y / self.height * TOWER_FLOORS;
         let (cx, cy) = (wx - wx.floor(), wy - wy.floor());
-        let top = p.y / self.height > 0.97; // la azotea no lleva ventanas
+        let h = p.y / self.height; // 0 en la base, 1 en la punta
+        // Luz roja de aviso en la punta que parpadea (como en los rascacielos de verdad).
+        if h > TOWER_BEACON_START {
+            let blink = smoothstep(0.6, 1.0, (u.time * TOWER_BEACON_SPEED).sin());
+            return GOTHAM_CONCRETE * light + TOWER_BEACON * (0.25 + 0.75 * blink);
+        }
+        // Concreto más oscuro abajo (hollín) y más claro arriba, con franjas verticales.
+        let stripes = 0.85 + 0.15 * ((p.x + p.z) / self.height * TOWER_COLUMNS * 0.5).floor().rem_euclid(2.0);
+        let concrete = GOTHAM_CONCRETE * (0.7 + 0.6 * h) * stripes;
+        let top = h > 0.97; // la azotea no lleva ventanas
         let glass = !top && cx > 0.25 && cx < 0.75 && cy > 0.3 && cy < 0.8;
         if !glass {
-            return GOTHAM_CONCRETE * light;
+            return concrete * light;
         }
         let id = (wx.floor() as i32, wy.floor() as i32);
         let phase = hash01(id.0, id.1, 2, self.seed) * 10.0;
         let epoch = (u.time * GOTHAM_FLICKER_SPEED + phase).floor() as i32;
         let on = hash01(id.0, id.1, epoch, self.seed.wrapping_add(3)) < GOTHAM_WINDOW_DENSITY;
         let emit = if on { GOTHAM_WINDOW * 0.8 } else { Vec3::ZERO };
-        GOTHAM_GLASS * light + emit * night
+        GOTHAM_GLASS * light + emit * (GOTHAM_DAY_WINDOWS + (1.0 - GOTHAM_DAY_WINDOWS) * night)
     }
 }
 

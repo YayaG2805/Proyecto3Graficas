@@ -102,10 +102,10 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Requisito: sol + nave propia + planeta que orbita y rota (con `dt`) | – | ✅ | `scene.rs`, `ship.rs` |
 | Requisito: fragment shader propio | – | ✅ | `shaders.rs` |
 | Planetas distinguibles (10 c/u, máx 5) | 50 | ✅ 5 de 5: Themyscira, Krypton, Gotham, Atlantis, Oa | `scene.rs` |
-| Luna Central City: jerarquía de transformaciones (rúbrica: lunas) | – | ✅ orbita a Gotham (radio 9) mientras Gotham orbita al sol; rayos animados; se escanea con E | `Scene::body_position`, `CentralCityShader` |
+| Luna Central City: jerarquía de transformaciones (rúbrica: lunas) | – | ✅ orbita a Gotham (radio 9) mientras Gotham orbita al sol; ciudad con manzanas, calles doradas y estelas de velocidad en las avenidas; rayos animados; se escanea con E | `Scene::body_position`, `CentralCityShader` |
 | Nave modelada por nosotros que sigue a la cámara (rúbrica) | – | ✅ Halcón | `assets/Halcon_Milenario.obj`, `Ship`, `ChaseCamera` |
 | Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, Themyscira, Krypton, Gotham, Atlantis, Oa, nave (paneles y motores), llama del turbo, órbita, cielo | `shaders.rs`, `HalconShader` en `ship.rs` |
-| Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), Central City (rayos), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `CentralCityShader`, `ExhaustShader` |
+| Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), Central City (rayos y estelas), batiseñal, luces rojas de los edificios, llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `CentralCityShader`, `ExhaustShader` |
 | Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06`; Krypton: crestas ridged `1 - |fbm|`; Gotham: escalones por manzana | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C; en el cinturón: 886 de 1508 objetos dibujados con C, todos sin C | `Renderer::sphere_visible` |
@@ -115,7 +115,10 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Agujero negro lejano: lente gravitacional `β = θ − θE²/θ`, sombra, anillo de fotones y disco de acreción animado | – | ✅ en el cielo, arriba a la derecha del sol al empezar | `black_hole` en `shaders.rs` (`BH_*`) |
 | Superman: vuela en loops alrededor de Krypton (1.6 radios, sube y baja) con estela que se desvanece | – | ✅ modelo `assets/heroes/superman.obj` (1444 triángulos + 2 LODs) | `creatures.rs`, `Renderer::draw_line_strip` |
 | Flash: corre por el ecuador de Central City (una vuelta cada ~2 s) con estela amarilla | – | ✅ modelo `flash.obj` (1432 triángulos + 2 LODs) | `creatures.rs` (`flash_path`) |
-| Batman: quieto en la azotea más alta de Gotham (el vértice más alto de su malla), gira con el planeta | – | ✅ modelo `batman.obj` (1624 triángulos + 2 LODs); falta la batiseñal de Sando (S8) | `creatures.rs` (`highest_point`, `standing_on`) |
+| Batman: quieto en la azotea más alta de Gotham (el vértice más alto de su malla), gira con el planeta | – | ✅ modelo `batman.obj` (1624 triángulos + 2 LODs) | `creatures.rs` (`highest_point`, `standing_on`) |
+| Batiseñal: haz de luz aditivo desde la azotea de Batman y círculo de frente a la cámara (billboard) con la silueta del murciélago hecha con desigualdades | – | ✅ se ve desde lejos y gira con Gotham | `creatures.rs` (`draw_bat_signal`, `BeamShader`, `BatDiscShader`, `BAT_SIGNAL_*`) |
+| Iluminación de cine en los héroes: sol + luz de relleno desde la cámara + luz de borde, para que se vean también del lado de noche | – | ✅ | `creatures.rs` (`hero_light`, `HERO_*`) |
+| Gotham gótica: azoteas de ladrillo, pizarra, piedra y cobre; smog en el borde; algunas ventanas prendidas de día; luz roja que parpadea en la punta de cada edificio | – | ✅ | `GothamShader`, `TowerPropShader` (`GOTHAM_ROOFS`, `GOTHAM_SMOG`, `TOWER_BEACON`) |
 | Aquaman montado en una ballena espacial que nada lento alrededor de Atlantis (jerarquía: Aquaman = ballena · traslación) | – | ✅ modelos `ballena.obj` (1342) y `aquaman.obj` (1366) + 2 LODs cada uno | `creatures.rs` (`whale_path`, `aquaman_path`) |
 | Linterna Verde: flota sobre Oa con brillo verde emisivo y un aura aditiva que pulsan con el tiempo | – | ✅ modelo `linterna_verde.obj` (1396 triángulos + 2 LODs) | `creatures.rs` (`lantern_path`, `LanternShader`, `draw_creature_glows`) |
 | Mujer Maravilla: estatua gigante de piedra blanca en la cima de Themyscira | – | ✅ modelo `mujer_maravilla.obj` (1546 triángulos + 2 LODs); falta el templo de Sando (S7) en ese punto | `creatures.rs` (`StoneShader`) |
