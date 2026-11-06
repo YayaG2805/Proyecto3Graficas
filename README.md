@@ -45,6 +45,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | O | Mostrar/ocultar las órbitas de los planetas |
 | N | Activar/desactivar el mapeo de normales (para comparar) |
 | P | Modo foto: congela la simulación |
+| F | Modo órbita cerca de un planeta (el HUD avisa cuando se puede). W/S lo rodean, A/D cambian el rumbo, flechas cambian la altura. F o Shift lo sueltan |
 | G | Activar/desactivar la gravedad de los planetas y el sol |
 | H | Mostrar/ocultar ayuda |
 
@@ -106,7 +107,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | LOD según distancia + contador | 8 | ✅ tecla L | `Renderer::draw_lods` |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
-| Modo de control local para rodear un planeta | 8 | ⬜ | |
+| Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |
 | Atracción gravitatoria | 10 | ✅ tecla G, se ve en el HUD | `Ship::gravity_accel` |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |

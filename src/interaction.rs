@@ -7,6 +7,8 @@ use crate::ship::{Ship, ShipInput};
 
 // se puede escanear un mundo si estas a menos de esta cantidad de radios de su superficie
 const SCAN_RANGE_RADII: f32 = 3.0;
+// se puede enganchar la orbita si estas a menos de esta cantidad de radios de la superficie
+const ORBIT_RANGE_RADII: f32 = 2.5;
 // el primer mundo q se elige como destino (bodies[0] es el sol)
 const FIRST_WORLD: usize = 1;
 
@@ -28,6 +30,8 @@ pub struct GameState {
     pub collected: u32,
     pub total: u32,
     pub photo_mode: bool,
+    // si shift venia apretado el cuadro pasado, pa saber cuando se aprieta de nuevo
+    boost_was_down: bool,
 }
 
 impl GameState {
@@ -42,6 +46,7 @@ impl GameState {
             collected: 0,
             total: 0,
             photo_mode: false,
+            boost_was_down: false,
         }
     }
 }
@@ -60,6 +65,14 @@ fn find_nearest(ship: &Ship, scene: &Scene, t: f32) -> (Option<usize>, f32) {
         }
     }
     (nearest, nearest_dist)
+}
+
+/// si el cuerpo mas cercano esta lo bastante cerca pa enganchar la orbita, el hud lo usa tambien
+pub fn orbit_in_range(state: &GameState, scene: &Scene) -> bool {
+    match state.nearest {
+        Some(i) => state.nearest_dist < ORBIT_RANGE_RADII * scene.bodies[i].radius,
+        None => false,
+    }
 }
 
 /// se llama una vez por cuadro, antes de mover la camara
@@ -86,7 +99,24 @@ pub fn update(state: &mut GameState, ship: &mut Ship, scene: &Scene, input: &Shi
         }
     }
 
-    // paso 4: con P entramos o salimos del modo foto
+    // paso 4: la orbita, en modo foto no se toca porque la nave esta congelada
+    // shift solo suelta cuando se aprieta de nuevo, si no al enganchar con shift abajo se soltaria solo
+    let boost_pressed = input.boost && !state.boost_was_down;
+    state.boost_was_down = input.boost;
+    if !state.photo_mode {
+        if ship.orbit_body().is_some() {
+            if input.orbit_toggle || boost_pressed {
+                ship.release_orbit();
+            }
+        } else if input.orbit_toggle && orbit_in_range(state, scene) {
+            if let Some(i) = nearest {
+                ship.engage_orbit(i, scene, t);
+            }
+        }
+    }
+    state.orbit_lock = ship.orbit_body();
+
+    // paso 5: con P entramos o salimos del modo foto
     if input.photo {
         state.photo_mode = !state.photo_mode;
     }
@@ -159,6 +189,53 @@ mod tests {
         scene.bodies[4].parent = Some(3);
         update(&mut state, &mut ship, &scene, &select(4), 0.0, 0.016);
         assert_eq!(state.warp_target, 3);
+    }
+
+    #[test]
+    fn la_f_solo_engancha_cerca_y_la_f_o_shift_sueltan() {
+        let scene = Scene::new();
+        let mut state = GameState::new();
+        let press_f = ShipInput { orbit_toggle: true, ..Default::default() };
+        let hold_shift = ShipInput { boost: true, ..Default::default() };
+        let radius = scene.bodies[1].radius;
+        let tick = |state: &mut GameState, ship: &mut Ship, input: &ShipInput| update(state, ship, &scene, input, 0.0, 0.016);
+
+        // lejos no engancha
+        let mut ship = ship_above(&scene, 1, radius * 2.6);
+        tick(&mut state, &mut ship, &press_f);
+        assert_eq!(state.orbit_lock, None);
+
+        // cerca si, y otra f suelta
+        let mut ship = ship_above(&scene, 1, radius * 2.0);
+        tick(&mut state, &mut ship, &press_f);
+        assert_eq!(state.orbit_lock, Some(1));
+        tick(&mut state, &mut ship, &press_f);
+        assert_eq!(state.orbit_lock, None);
+
+        // shift tambien suelta
+        tick(&mut state, &mut ship, &press_f);
+        assert_eq!(state.orbit_lock, Some(1));
+        tick(&mut state, &mut ship, &hold_shift);
+        assert_eq!(state.orbit_lock, None);
+
+        // si enganchamos con shift ya abajo no se suelta sola, tiene q apretarlo de nuevo
+        let f_with_shift = ShipInput { orbit_toggle: true, boost: true, ..Default::default() };
+        tick(&mut state, &mut ship, &f_with_shift);
+        tick(&mut state, &mut ship, &hold_shift);
+        assert_eq!(state.orbit_lock, Some(1));
+        tick(&mut state, &mut ship, &ShipInput::default());
+        tick(&mut state, &mut ship, &hold_shift);
+        assert_eq!(state.orbit_lock, None);
+    }
+
+    #[test]
+    fn en_modo_foto_la_f_no_hace_nada() {
+        let scene = Scene::new();
+        let mut state = GameState::new();
+        state.photo_mode = true;
+        let mut ship = ship_above(&scene, 1, 2.0);
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, 0.016);
+        assert_eq!(state.orbit_lock, None);
     }
 
     #[test]

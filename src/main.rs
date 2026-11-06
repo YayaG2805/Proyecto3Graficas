@@ -332,7 +332,13 @@ fn main() {
         // HUD
         let s = game.renderer.stats;
         let speed = game.ship.velocity.length();
-        d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}", game.warp), 10, 10, 20, Color::RAYWHITE);
+        // en orbita muestra el mundo, si no avisa si ya estamos lo bastante cerca pa apretar la f
+        let orbit_text = match game.state.orbit_lock {
+            Some(i) => game.scene.bodies[i].name,
+            None if interaction::orbit_in_range(&game.state, &game.scene) => "disponible",
+            None => "lejos",
+        };
+        d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}   orbita [F]: {orbit_text}", game.warp), 10, 10, 20, Color::RAYWHITE);
         d.draw_text(
             &format!(
                 "objetos: {} dibujados / {} descartados   triangulos: {} entran / {} rasterizados",
@@ -359,7 +365,7 @@ fn main() {
         );
         if show_help {
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   G gravedad   P foto   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   F orbita   G gravedad   P foto   H ocultar ayuda",
                 10,
                 WINDOW_H - 28,
                 18,

@@ -54,6 +54,54 @@ const ROLL_RESPONSE: f32 = 6.0;
 // el empuje normal de la nave es 20, mientras esto sea menor siempre se puede escapar
 const MAX_GRAVITY_ACCEL: f32 = 12.0;
 
+// --- modo orbita ---
+// empuje con w/s mientras rodeamos el planeta
+const ORBIT_ACCEL: f32 = 6.0;
+// freno normal y freno con espacio, con estos numeros la velocidad maxima es 6 / 0.8 = 7.5
+// asi una vuelta tarda como 7 segundos y da tiempo de ver la superficie
+const ORBIT_DRAG: f32 = 0.8;
+const ORBIT_BRAKE_DRAG: f32 = 3.0;
+// q tan rapido sube y baja con las flechas
+const ORBIT_CLIMB_ACCEL: f32 = 12.0;
+const ORBIT_CLIMB_MAX: f32 = 6.0;
+// lo mas bajo q se puede volar, medido encima de donde empieza la colision
+const ORBIT_MIN_ALT: f32 = 0.3;
+// lo mas alto q se puede volar, en radios del planeta
+const ORBIT_MAX_ALT_RADII: f32 = 3.0;
+// q tan rapido nos saca hacia arriba si enganchamos muy pegados a la superficie
+const ORBIT_ALT_RESPONSE: f32 = 2.0;
+// q tan rapido cambia la nave entre la orientacion de vuelo y la de orbita, pa q no de un salto
+const ORBIT_BLEND_RESPONSE: f32 = 4.0;
+// en orbita la camara mira un poco hacia abajo pa ver la superficie, mas alto = mas inclinada
+const ORBIT_CAMERA_TILT: f32 = 3.0;
+
+// el radio donde empieza la colision de un cuerpo, la deformacion de los planetas llega hasta un 12%
+fn collision_radius(radius: f32) -> f32 {
+    radius * 1.12 + 0.8
+}
+
+// un vector cualquiera q forme angulo recto con v, pa cuando no hay otra referencia
+fn any_perpendicular(v: Vec3) -> Vec3 {
+    let axis = if v.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
+    v.cross(axis).normalized()
+}
+
+// como vamos enganchados a un planeta, todo medido desde su centro
+struct Orbit {
+    /// indice del cuerpo q estamos rodeando
+    body: usize,
+    /// de largo 1, del centro del planeta hacia la nave, tambien es el "arriba" de la nave
+    normal: Vec3,
+    /// de largo 1, pa donde apunta la nave, siempre pegado a la superficie (angulo recto con normal)
+    heading: Vec3,
+    /// a q altura va sobre la superficie
+    altitude: f32,
+    /// a q velocidad avanza rodeando el planeta, negativa si va de reversa
+    speed: f32,
+    /// a q velocidad va subiendo o bajando
+    climb_rate: f32,
+}
+
 pub struct Ship {
     pub position: Vec3,
     pub velocity: Vec3,
@@ -71,6 +119,13 @@ pub struct Ship {
     pub pitch_rate: f32,
     /// si los cuerpos atraen a la nave o no (tecla G), el hud lo lee pa mostrarlo
     pub gravity_on: bool,
+    // la orbita actual, None = vuelo normal
+    orbit: Option<Orbit>,
+    // de 0 a 1: 0 = orientacion de vuelo, 1 = orientacion de orbita, en medio = cambiando suave
+    frame_blend: f32,
+    // la ultima orientacion de orbita, se guarda pa poder regresar suave despues de soltarla
+    orbit_forward: Vec3,
+    orbit_up: Vec3,
 }
 
 // calcula la nueva velocidad de giro de un eje, sirve igual pa yaw y pa pitch
@@ -85,7 +140,7 @@ fn next_spin_rate(rate: f32, input: f32, accel: f32, max: f32, dt: f32) -> f32 {
 }
 
 /// Lo que el jugador presiona este cuadro (main.rs lo llena desde raylib).
-// el allow se quita cuando a5 y a6 lean las teclas q faltan (f y tab)
+// el allow se quita cuando a6 lea la tecla q falta (tab)
 #[allow(dead_code)]
 #[derive(Default, Clone, Copy)]
 pub struct ShipInput {
@@ -105,7 +160,7 @@ pub struct ShipInput {
 
 impl Ship {
     pub fn new(position: Vec3) -> Ship {
-        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true }
+        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true, orbit: None, frame_blend: 0.0, orbit_forward: Vec3::ZERO, orbit_up: Vec3::UP }
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -114,10 +169,162 @@ impl Ship {
 
     /// Base ortonormal (derecha, arriba, adelante) de la nave.
     pub fn basis(&self) -> (Vec3, Vec3, Vec3) {
-        let f = self.forward();
-        let r = f.cross(Vec3::UP).normalized();
+        let (f, up) = self.frame();
+        let mut r = f.cross(up).normalized();
+        // si adelante y arriba quedaron alineados no hay derecha definida, agarramos cualquiera
+        if r.length() < 0.5 {
+            r = any_perpendicular(f);
+        }
         let u = r.cross(f);
         (r, u, f)
+    }
+
+    // pa donde mira la nave y cual es su "arriba de referencia" en este momento
+    fn frame(&self) -> (Vec3, Vec3) {
+        // en vuelo normal arriba siempre es +y, esto es exactamente lo de siempre
+        if self.frame_blend <= 0.0 {
+            return (self.forward(), Vec3::UP);
+        }
+        // cambiando de modo o en orbita mezclamos las dos orientaciones segun el blend
+        let mut f = self.forward().lerp(self.orbit_forward, self.frame_blend).normalized();
+        if f.length() < 0.5 {
+            f = self.orbit_forward;
+        }
+        (f, Vec3::UP.lerp(self.orbit_up, self.frame_blend).normalized())
+    }
+
+    /// el "arriba" q debe usar la camara: +y volando normal, la normal del planeta en orbita
+    pub fn camera_up(&self) -> Vec3 {
+        let (_, up) = self.frame();
+        // en el polo sur mezclar +y con -y puede dar cero justo a la mitad
+        if up.length() < 0.5 {
+            return self.basis().1;
+        }
+        up
+    }
+
+    /// el cuerpo al q estamos enganchados, si hay alguno
+    pub fn orbit_body(&self) -> Option<usize> {
+        self.orbit.as_ref().map(|o| o.body)
+    }
+
+    /// se engancha al cuerpo i desde donde este la nave ahorita, sin mover nada de golpe
+    pub fn engage_orbit(&mut self, i: usize, scene: &Scene, t: f32) {
+        // paso 1: el "arriba" es la linea q va del centro del planeta a la nave
+        let radius = scene.bodies[i].radius;
+        let center = scene.body_position(i, t);
+        let from_center = self.position - center;
+        let distance = from_center.length().max(1e-4);
+        let normal = from_center / distance;
+
+        // paso 2: a lo q mira la nave le quito la parte q apunta hacia o contra el planeta
+        // lo q queda es la direccion pegada a la superficie
+        let (_, _, looking) = self.basis();
+        let flat = looking - normal * looking.dot(normal);
+        // si iba mirando recto al planeta no queda casi nada, agarramos cualquier direccion valida
+        let heading = if flat.length() > 0.1 { flat.normalized() } else { any_perpendicular(normal) };
+
+        // paso 3: la velocidad del planeta, comparando donde estaba hace un momentito
+        let moment = 0.01;
+        let planet_velocity = (center - scene.body_position(i, t - moment)) / moment;
+        let relative = self.velocity - planet_velocity;
+
+        // paso 4: la orbita arranca con el movimiento q ya traia, asi no se siente un frenon
+        self.orbit = Some(Orbit {
+            body: i,
+            normal,
+            heading,
+            altitude: distance - radius,
+            speed: relative.dot(heading),
+            climb_rate: relative.dot(normal).clamp(-ORBIT_CLIMB_MAX, ORBIT_CLIMB_MAX),
+        });
+        self.orbit_forward = heading;
+        self.orbit_up = normal;
+        self.pitch_rate = 0.0;
+    }
+
+    /// suelta la orbita, la nave sigue con la velocidad q traia
+    pub fn release_orbit(&mut self) {
+        if self.orbit.take().is_none() {
+            return;
+        }
+        // el vuelo normal usa yaw y pitch, asi q los saco de pa donde estaba mirando
+        let f = self.orbit_forward;
+        self.yaw = (-f.x).atan2(-f.z);
+        self.pitch = f.y.asin().clamp(-PITCH_LIMIT, PITCH_LIMIT);
+    }
+
+    // un cuadro rodeando el planeta
+    fn orbit_step(&mut self, input: ShipInput, dt: f32, scene: &Scene, t: f32) {
+        let Some(o) = self.orbit.as_mut() else { return };
+        let radius = scene.bodies[o.body].radius;
+
+        // paso 1: a/d giran el rumbo sobre la superficie, con la misma inercia del vuelo normal
+        // mezclo el rumbo con su derecha: eso lo rota sin despegarlo de la superficie
+        let old_yaw_rate = self.yaw_rate;
+        self.yaw_rate = next_spin_rate(self.yaw_rate, input.turn, TURN_ACCEL, TURN_MAX, dt);
+        let turn = (old_yaw_rate + self.yaw_rate) * 0.5 * dt;
+        let right = o.heading.cross(o.normal);
+        o.heading = (o.heading * turn.cos() + right * turn.sin()).normalized();
+
+        // paso 2: w/s aceleran alrededor del planeta y siempre hay un poco de freno
+        // con empuje y freno juntos la velocidad se acerca sola a empuje / freno y ahi se queda
+        // esta formula da lo mismo con cualquier dt, sin importar cuantos cuadros se dibujen
+        let old_speed = o.speed;
+        let drag = if input.brake { ORBIT_BRAKE_DRAG } else { ORBIT_DRAG };
+        let top_speed = input.thrust * ORBIT_ACCEL / drag;
+        o.speed = top_speed + (o.speed - top_speed) * (-drag * dt).exp();
+
+        // paso 3: avanzar rodeando es rotar normal y rumbo juntos, un angulo = distancia / radio
+        let angle = (old_speed + o.speed) * 0.5 * dt / (radius + o.altitude);
+        let (normal, heading) = (o.normal, o.heading);
+        o.normal = (normal * angle.cos() + heading * angle.sin()).normalized();
+        o.heading = (heading * angle.cos() - normal * angle.sin()).normalized();
+        // los redondeos los van separando de a poquito, asi los regreso al angulo recto
+        o.heading = (o.heading - o.normal * o.heading.dot(o.normal)).normalized();
+
+        // paso 4: las flechas cambian la altura
+        let old_climb = o.climb_rate;
+        o.climb_rate = next_spin_rate(o.climb_rate, input.climb, ORBIT_CLIMB_ACCEL, ORBIT_CLIMB_MAX, dt);
+        o.altitude += (old_climb + o.climb_rate) * 0.5 * dt;
+
+        // paso 5: los limites de altura, el de abajo empuja suave por si enganchamos muy pegados
+        let min_altitude = collision_radius(radius) - radius + ORBIT_MIN_ALT;
+        let max_altitude = radius * ORBIT_MAX_ALT_RADII;
+        if o.altitude < min_altitude {
+            o.altitude += (min_altitude - o.altitude) * (1.0 - (-ORBIT_ALT_RESPONSE * dt).exp());
+            o.climb_rate = o.climb_rate.max(0.0);
+        }
+        if o.altitude > max_altitude {
+            o.altitude = max_altitude;
+            o.climb_rate = o.climb_rate.min(0.0);
+        }
+
+        // paso 6: la posicion sale del centro del planeta en este momento
+        // por eso la nave lo sigue solita mientras el planeta orbita al sol
+        let old_position = self.position;
+        self.position = scene.body_position(o.body, t) + o.normal * (radius + o.altitude);
+        self.orbit_forward = o.heading;
+        self.orbit_up = o.normal;
+
+        // paso 7: la velocidad real es lo q nos movimos entre el tiempo, se usa al soltar la orbita
+        self.velocity = (self.position - old_position) / dt.max(1e-5);
+
+        self.update_visuals(false, dt);
+    }
+
+    // ladeo y turbo, se usan igual en vuelo normal y en orbita
+    fn update_visuals(&mut self, boost: bool, dt: f32) {
+        // la nave se ladea segun lo q de verdad esta girando, no segun la tecla
+        // por eso al soltar se endereza junto con el giro
+        let target_roll = -self.yaw_rate / TURN_MAX * ROLL_MAX;
+        self.roll += (target_roll - self.roll) * (1.0 - (-ROLL_RESPONSE * dt).exp());
+
+        // Turbo: sube y baja suave (independiente de los FPS). Enciende rápido y se apaga
+        // un poco más lento, como si la llama se fuera consumiendo.
+        let boost_target = if boost { 1.0 } else { 0.0 };
+        let boost_rate = if boost_target > self.boost { 8.0 } else { 3.0 };
+        self.boost += (boost_target - self.boost) * (1.0 - (-boost_rate * dt).exp());
     }
 
     pub fn model_matrix(&self, scale: f32) -> Mat4 {
@@ -136,11 +343,23 @@ impl Ship {
         if input.gravity_toggle {
             self.gravity_on = !self.gravity_on;
         }
-        if self.gravity_on {
-            self.velocity += self.gravity_accel(scene, t) * dt;
+        if self.orbit.is_some() {
+            // en orbita la altura ya la controlamos nosotros, por eso aqui no hay gravedad
+            self.orbit_step(input, dt, scene, t);
+        } else {
+            if self.gravity_on {
+                self.velocity += self.gravity_accel(scene, t) * dt;
+            }
+            self.fly(input, dt);
         }
-        self.fly(input, dt);
         self.collide(scene, t);
+
+        // el blend camina hacia 1 en orbita y hacia 0 en vuelo, y al llegar se queda exacto
+        let target = if self.orbit.is_some() { 1.0 } else { 0.0 };
+        self.frame_blend += (target - self.frame_blend) * (1.0 - (-ORBIT_BLEND_RESPONSE * dt).exp());
+        if (target - self.frame_blend).abs() < 0.001 {
+            self.frame_blend = target;
+        }
     }
 
     // cuanto y pa donde jalan todos los cuerpos a la nave en este momento
@@ -188,10 +407,8 @@ impl Ship {
             self.pitch_rate = 0.0;
         }
 
-        // paso 5: la nave se ladea segun lo q de verdad esta girando, no segun la tecla
-        // por eso al soltar se endereza junto con el giro
-        let target_roll = -self.yaw_rate / TURN_MAX * ROLL_MAX;
-        self.roll += (target_roll - self.roll) * (1.0 - (-ROLL_RESPONSE * dt).exp());
+        // paso 5: ladeo y llama del turbo
+        self.update_visuals(input.boost, dt);
 
         // Aceleración progresiva hacia adelante + fricción exponencial.
         // El turbo (Shift) empuja hacia adelante aunque no se presione W.
@@ -199,11 +416,6 @@ impl Ship {
         let accel = if input.boost { 60.0 } else { 20.0 };
         self.velocity += self.forward() * (thrust * accel * dt);
 
-        // Turbo: sube y baja suave (independiente de los FPS). Enciende rápido y se apaga
-        // un poco más lento, como si la llama se fuera consumiendo.
-        let boost_target = if input.boost { 1.0 } else { 0.0 };
-        let boost_rate = if boost_target > self.boost { 8.0 } else { 3.0 };
-        self.boost += (boost_target - self.boost) * (1.0 - (-boost_rate * dt).exp());
         let drag = if input.brake { 3.0 } else { 0.6 };
         self.velocity = self.velocity * (-drag * dt).exp();
         self.position += self.velocity * dt;
@@ -214,7 +426,7 @@ impl Ship {
         for (i, b) in scene.bodies.iter().enumerate() {
             let center = scene.body_position(i, t);
             let to_ship = self.position - center;
-            let min_dist = b.radius * 1.12 + 0.8;
+            let min_dist = collision_radius(b.radius);
             let d = to_ship.length();
             if d < min_dist {
                 let n = to_ship / d.max(1e-4);
@@ -288,11 +500,13 @@ pub struct ChaseCamera {
     pub target: Vec3,
     pub distance: f32,
     pub height: f32,
+    /// el "arriba" de la camara, viene de la nave pa q funcione tambien en los polos de un planeta
+    pub up: Vec3,
 }
 
 impl ChaseCamera {
     pub fn new(ship: &Ship) -> ChaseCamera {
-        let mut c = ChaseCamera { position: ship.position, target: ship.position, distance: 7.0, height: 2.2 };
+        let mut c = ChaseCamera { position: ship.position, target: ship.position, distance: 7.0, height: 2.2, up: Vec3::UP };
         c.update(ship, 1.0);
         c
     }
@@ -302,17 +516,19 @@ impl ChaseCamera {
         let desired = ship.position - f * self.distance + up * self.height;
         let k = 1.0 - (-8.0 * dt).exp(); // suavizado independiente de los FPS
         self.position = self.position.lerp(desired, k);
-        self.target = ship.position + f * 6.0;
+        // volando normal el blend es 0 y esto es lo de siempre, en orbita baja la mirada al planeta
+        self.target = ship.position + f * 6.0 - up * (ORBIT_CAMERA_TILT * ship.frame_blend);
+        self.up = ship.camera_up();
     }
 
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at(self.position, self.target, Vec3::UP)
+        Mat4::look_at(self.position, self.target, self.up)
     }
 
     /// (derecha, arriba, adelante) de la cámara.
     pub fn basis(&self) -> (Vec3, Vec3, Vec3) {
         let f = (self.target - self.position).normalized();
-        let r = f.cross(Vec3::UP).normalized();
+        let r = f.cross(self.up).normalized();
         (r, r.cross(f), f)
     }
 }
@@ -466,6 +682,228 @@ mod tests {
         let end = (ship.position - center).length();
         println!("escapando con gravedad enorme: de {start:.2} a {end:.2} en 2 s");
         assert!(end > start + 2.0);
+    }
+
+    // pone la nave a cierta altura en una direccion del planeta y la engancha, sin velocidad de arranque
+    fn orbiting_ship(scene: &Scene, i: usize, dir: Vec3, height: f32) -> Ship {
+        let center = scene.body_position(i, 0.0);
+        let mut ship = Ship::new(center + dir * (scene.bodies[i].radius + height));
+        ship.engage_orbit(i, scene, 0.0);
+        let o = ship.orbit.as_mut().unwrap();
+        o.speed = 0.0;
+        o.climb_rate = 0.0;
+        ship
+    }
+
+    fn is_finite(v: Vec3) -> bool {
+        v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
+    }
+
+    // revisa q la orientacion de la nave sea valida: sin nan y con los 3 ejes de largo 1
+    fn assert_valid_basis(ship: &Ship) {
+        let (r, u, f) = ship.basis();
+        for v in [r, u, f] {
+            assert!(is_finite(v));
+            assert!((v.length() - 1.0).abs() < 0.01);
+        }
+        assert!(is_finite(ship.camera_up()));
+    }
+
+    #[test]
+    fn la_orbita_sigue_al_planeta_a_la_misma_altura() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut ship = orbiting_ship(&scene, 1, Vec3::UP, 3.0);
+        let wanted = scene.bodies[1].radius + 3.0;
+        let start_position = ship.position;
+
+        // en 10 s el planeta avanza como 36 unidades, y la nave se tiene q ir con el
+        for step in 1..=600 {
+            let t = step as f32 * dt;
+            ship.update(ShipInput::default(), dt, &scene, t);
+            let distance = (ship.position - scene.body_position(1, t)).length();
+            assert!((distance - wanted).abs() < 0.01);
+        }
+        assert!((ship.position - start_position).length() > 20.0);
+    }
+
+    #[test]
+    fn enganchar_no_mueve_la_nave_de_golpe() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut ship = Ship::new(scene.body_position(1, 0.0) + Vec3::new(3.0, 5.0, 2.0));
+        let before = ship.position;
+        let (_, _, looking_before) = ship.basis();
+
+        ship.engage_orbit(1, &scene, 0.0);
+        ship.update(ShipInput::default(), dt, &scene, dt);
+
+        // en un cuadro solo se puede mover lo q se movio el planeta
+        assert!((ship.position - before).length() < 0.2);
+        // y la orientacion todavia casi no cambio
+        let (_, _, looking_after) = ship.basis();
+        assert!(looking_before.dot(looking_after) > 0.99);
+    }
+
+    #[test]
+    fn w_rodea_el_planeta_y_la_nave_queda_bien_orientada() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut ship = orbiting_ship(&scene, 2, Vec3::new(1.0, 0.0, 0.0), 3.0);
+        let start_normal = ship.orbit.as_ref().unwrap().normal;
+        let accelerate = ShipInput { thrust: 1.0, ..Default::default() };
+
+        // el primer cuadro la velocidad todavia es chiquita, sube poco a poco
+        ship.update(accelerate, dt, &scene, dt);
+        assert!(ship.orbit.as_ref().unwrap().speed < 1.0);
+
+        // en 3 s da como un cuarto de vuelta, mas tiempo ya daria la vuelta completa y regresaria
+        for step in 2..=180 {
+            ship.update(accelerate, dt, &scene, step as f32 * dt);
+        }
+        let o = ship.orbit.as_ref().unwrap();
+        assert!(o.normal.dot(start_normal) < 0.5, "no dio suficiente vuelta");
+        assert!(o.heading.dot(o.normal).abs() < 1e-3, "el rumbo se despego de la superficie");
+
+        // ya sin mezcla: el arriba de la nave es la normal y mira pa donde va
+        let (_, up, forward) = ship.basis();
+        assert_eq!(ship.frame_blend, 1.0);
+        assert!(up.dot(o.normal) > 0.999);
+        assert!(forward.dot(o.heading) > 0.999);
+    }
+
+    #[test]
+    fn la_altura_respeta_los_limites_y_nunca_toca_la_colision() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let radius = scene.bodies[2].radius;
+        let mut ship = orbiting_ship(&scene, 2, Vec3::UP, 3.0);
+        let mut step = 0;
+        let mut run = |ship: &mut Ship, climb: f32| {
+            for _ in 0..1200 {
+                step += 1;
+                ship.update(ShipInput { climb, ..Default::default() }, dt, &scene, step as f32 * dt);
+            }
+            ship.orbit.as_ref().unwrap().altitude
+        };
+
+        let top = run(&mut ship, 1.0);
+        assert!((top - radius * ORBIT_MAX_ALT_RADII).abs() < 1e-3);
+
+        let bottom = run(&mut ship, -1.0);
+        assert!(bottom >= collision_radius(radius) - radius);
+        println!("altura en krypton: de {bottom:.2} a {top:.2}");
+    }
+
+    #[test]
+    fn al_soltar_conserva_la_velocidad_y_no_salta() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut ship = orbiting_ship(&scene, 2, Vec3::new(1.0, 0.0, 0.0), 3.0);
+        let mut t = 0.0;
+        for _ in 0..180 {
+            t += dt;
+            ship.update(ShipInput { thrust: 1.0, ..Default::default() }, dt, &scene, t);
+        }
+        let (speed_before, position_before) = (ship.velocity, ship.position);
+        let (_, _, looking_before) = ship.basis();
+        assert!(speed_before.length() > 5.0);
+
+        ship.release_orbit();
+        assert_eq!(ship.orbit_body(), None);
+        assert_eq!((ship.velocity - speed_before).length(), 0.0);
+
+        // sin apretar nada sigue por donde iba, solo se mueve lo normal de un cuadro
+        t += dt;
+        ship.update(ShipInput::default(), dt, &scene, t);
+        assert!((ship.position - position_before).length() < speed_before.length() * dt * 1.5);
+        let (_, _, looking_after) = ship.basis();
+        assert!(looking_before.dot(looking_after) > 0.99);
+    }
+
+    #[test]
+    fn los_polos_no_rompen_la_nave_ni_la_camara() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let south = Vec3::new(0.0, -1.0, 0.0);
+
+        // arranco en cada polo, cruzo por encima un rato y suelto justo en el sur
+        for dir in [Vec3::UP, south] {
+            let mut ship = orbiting_ship(&scene, 2, dir, 3.0);
+            let mut camera = ChaseCamera::new(&ship);
+            let mut t = 0.0;
+            for _ in 0..300 {
+                t += dt;
+                ship.update(ShipInput { thrust: 1.0, turn: 0.3, ..Default::default() }, dt, &scene, t);
+                camera.update(&ship, dt);
+                assert_valid_basis(&ship);
+            }
+
+            // lo devuelvo al polo sur y lo suelto, ahi +y y la normal son justo opuestos
+            let center = scene.body_position(2, t);
+            let o = ship.orbit.as_mut().unwrap();
+            o.normal = south;
+            o.heading = Vec3::new(1.0, 0.0, 0.0);
+            ship.position = center + south * 8.0;
+            ship.update(ShipInput::default(), dt, &scene, t + dt);
+            ship.release_orbit();
+            t += dt;
+
+            // toda la vuelta al vuelo normal tiene q ser valida, cuadro por cuadro
+            for _ in 0..300 {
+                t += dt;
+                ship.update(ShipInput::default(), dt, &scene, t);
+                camera.update(&ship, dt);
+                assert_valid_basis(&ship);
+            }
+            assert_eq!(ship.frame_blend, 0.0);
+            assert_eq!(camera.up.y, 1.0);
+        }
+    }
+
+    #[test]
+    fn enganchar_mirando_recto_al_planeta_da_un_rumbo_valido() {
+        let scene = Scene::new();
+        let center = scene.body_position(1, 0.0);
+        // la nave mira a -z, asi q la pongo en +z pa q vea justo al centro
+        let mut ship = Ship::new(center + Vec3::new(0.0, 0.0, 8.0));
+        ship.engage_orbit(1, &scene, 0.0);
+        let o = ship.orbit.as_ref().unwrap();
+        assert!(is_finite(o.heading));
+        assert!((o.heading.length() - 1.0).abs() < 1e-3);
+        assert!(o.heading.dot(o.normal).abs() < 1e-3);
+    }
+
+    #[test]
+    fn la_orbita_casi_no_cambia_con_los_fps() {
+        let scene = Scene::new();
+        let run = |dt: f32| {
+            let mut ship = orbiting_ship(&scene, 2, Vec3::new(1.0, 0.0, 0.0), 3.0);
+            let steps = (6.0 / dt).round() as usize;
+            for i in 1..=steps {
+                let t = i as f32 * dt;
+                let middle = t - dt * 0.5;
+                let input = ShipInput { thrust: 1.0, turn: if middle < 2.0 { 1.0 } else { 0.0 }, climb: if middle < 1.0 { 1.0 } else { 0.0 }, ..Default::default() };
+                ship.update(input, dt, &scene, t);
+            }
+            ship.position
+        };
+        let difference = (run(1.0 / 30.0) - run(1.0 / 144.0)).length();
+        println!("orbita, diferencia entre 30 y 144 fps: {difference:.3} unidades");
+        assert!(difference < 0.5);
+    }
+
+    #[test]
+    fn volando_normal_el_arriba_sigue_siendo_y_exacto() {
+        let mut ship = Ship::new(Vec3::ZERO);
+        ship.yaw = 0.7;
+        ship.pitch = 0.4;
+        let f = ship.forward();
+        let (r, u, forward) = ship.basis();
+        assert_eq!(ship.camera_up().y, 1.0);
+        assert_eq!((forward - f).length(), 0.0);
+        assert_eq!((r - f.cross(Vec3::UP).normalized()).length(), 0.0);
+        assert!(is_finite(u));
     }
 
     #[test]
