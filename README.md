@@ -125,7 +125,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Atracción gravitatoria | 10 | ✅ tecla G, se ve en el HUD | `Ship::gravity_accel` |
 | Distribución procedural reproducible (semilla `PROP_SEED`) | 10 | ✅ cristales en Krypton, árboles en el pasto de Themyscira, edificios en azoteas de Gotham, corales en los arrecifes de Atlantis | `props.rs` (`scatter`), `scene.rs` |
 | Posición y orientación sobre la superficie curva mientras el planeta rota | 5 | ✅ | `props.rs` (`instance_model`), `Body::surface` |
-| Modelos propios sobre la superficie (5 c/u, máx 4) | 20 | 🟡 código listo (carga, LOD, shaders y reparto); faltan los `.obj` de Blender: cristal (Krypton), arbol (Themyscira), edificio (Gotham), coral (Atlantis) | `assets/props/`, `props.rs` (`load_prop_lods`), `scene.rs` |
+| Modelos propios sobre la superficie (5 c/u, máx 4) | 20 | ✅ 4 tipos, cada uno con LOD 1: cristales (Krypton), árboles (Themyscira), edificios góticos (Gotham), corales (Atlantis) | `assets/props/`, `props.rs` (`load_prop_lods`), `scene.rs` |
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
 | Cristales coleccionables (extra) | – | ✅ 2 por mundo con semilla fija, contador en el HUD | `interaction.rs`, `COLLECTIBLE_SEED`, `CrystalShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
