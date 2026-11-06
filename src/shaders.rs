@@ -834,8 +834,16 @@ impl Sky {
         Sky { nebula: Texture::from_fn(256, 128, |u, v| nebula_color(sphere_dir(u, v))) }
     }
 
-    /// Color del cielo en la dirección `dir` (se llama en cada píxel vacío).
-    pub fn color(&self, dir: Vec3, u: &Uniforms) -> Vec3 {
+    /// Color del cielo en la dirección `view_dir` (se llama en cada píxel vacío).
+    pub fn color(&self, view_dir: Vec3, u: &Uniforms) -> Vec3 {
+        // Agujero negro: cerca de él la luz se dobla (lente gravitacional), así que el resto
+        // del cielo (nebulosa y estrellas) se calcula con la dirección YA desviada.
+        let hole = black_hole(view_dir, u.time);
+        if hole.in_shadow {
+            return hole.emission; // dentro de la sombra no llega luz de atrás: solo el disco
+        }
+        let dir = hole.dir;
+
         // Fondo + nebulosa leída de la textura precalculada (en vez de calcular el ruido).
         let (tu, tv) = sphere_uv(dir);
         let mut c = Vec3::new(0.005, 0.006, 0.02) + self.nebula.sample(tu, tv);
@@ -862,15 +870,99 @@ impl Sky {
 
         // Resplandor alrededor del sol (depende de la cámara, así que también va en vivo).
         let to_sun = (u.light_pos - u.camera_pos).normalized();
-        let g = dir.dot(to_sun).max(0.0);
+        let g = view_dir.dot(to_sun).max(0.0);
         c += Vec3::new(1.0, 0.55, 0.15) * (g.powf(60.0) * 0.6 + g.powf(8.0) * 0.08);
+
+        // Disco de acreción y anillo de fotones del agujero negro (cero lejos de él).
+        c += hole.emission;
 
         // Efecto warp (solo cuesta cuando está activo).
         if u.warp > 0.0 {
-            c += warp_streaks(dir, u) * u.warp;
+            c += warp_streaks(view_dir, u) * u.warp;
         }
         c
     }
+}
+
+// ---------------------------------------------------------------------------
+// AGUJERO NEGRO lejano (Diego, D7): está tan lejos que solo importa su DIRECCIÓN.
+// Lente gravitacional con la ecuación de lente:  β = θ − θE² / θ
+//   θ  = ángulo entre lo que mira el píxel y el centro del agujero
+//   β  = ángulo de donde viene en realidad esa luz (si sale negativo, del otro lado:
+//        por eso las estrellas de atrás aparecen "reflejadas" formando un anillo)
+//   θE = radio del anillo de Einstein
+// Encima: sombra negra, anillo de fotones y un disco de acreción animado e inclinado.
+// ---------------------------------------------------------------------------
+/// Hacia dónde está el agujero negro (se ve a la derecha y arriba del sol al empezar).
+pub const BH_DIR: Vec3 = Vec3::new(0.42, 0.22, -0.88);
+/// Radio angular del anillo de Einstein (radianes): qué tan fuerte dobla la luz.
+const BH_EINSTEIN: f32 = 0.06;
+/// Radio angular de la sombra negra.
+const BH_SHADOW: f32 = 0.045;
+/// Hasta qué ángulo se nota la lente (después se apaga suave para que no haya un borde).
+const BH_INFLUENCE: f32 = 0.5;
+/// Disco de acreción: radios interior y exterior (radianes) y qué tan de canto se ve
+/// (cos de la inclinación: chico = muy aplastado).
+const BH_DISK_INNER: f32 = 0.06;
+const BH_DISK_OUTER: f32 = 0.16;
+const BH_DISK_COS_TILT: f32 = 0.22;
+/// Qué tan rápido gira el disco (los anillos de adentro giran más rápido).
+const BH_DISK_SPIN: f32 = 0.08;
+const BH_DISK_HOT: Vec3 = Vec3::new(1.0, 0.85, 0.55);
+const BH_DISK_COOL: Vec3 = Vec3::new(0.9, 0.35, 0.08);
+
+/// Lo que el agujero negro le hace a un píxel del cielo.
+struct BlackHole {
+    /// Dirección desviada con la que se sigue calculando el cielo.
+    dir: Vec3,
+    /// true = el píxel cae en la sombra (no se ve nada de atrás).
+    in_shadow: bool,
+    /// Luz propia: disco de acreción + anillo de fotones.
+    emission: Vec3,
+}
+
+fn black_hole(dir: Vec3, time: f32) -> BlackHole {
+    let c = BH_DIR.normalized();
+    let cos_t = dir.dot(c).clamp(-1.0, 1.0);
+    let theta = cos_t.acos();
+    if theta > BH_INFLUENCE {
+        return BlackHole { dir, in_shadow: false, emission: Vec3::ZERO }; // lejos: sin efecto
+    }
+
+    // Base alrededor del centro del agujero: e1 "a la derecha", e2 "hacia arriba".
+    let e1 = c.cross(Vec3::UP).normalized();
+    let e2 = e1.cross(c);
+    let (x, y) = (dir.dot(e1), dir.dot(e2)); // ≈ desplazamiento angular desde el centro
+
+    // --- Lente: β = θ − θE²/θ, apagando la desviación cerca del borde de influencia ---
+    let fade = 1.0 - smoothstep(0.5 * BH_INFLUENCE, BH_INFLUENCE, theta);
+    let beta = theta - BH_EINSTEIN * BH_EINSTEIN / theta.max(1e-4) * fade;
+    let perp = (dir - c * cos_t).normalized(); // dirección "hacia afuera" desde el centro
+    let bent = (c * beta.cos() + perp * beta.sin()).normalized();
+
+    // --- Disco de acreción: un anillo inclinado → en pantalla es una elipse aplastada ---
+    let rho = (x * x + (y / BH_DISK_COS_TILT).powi(2)).sqrt();
+    let mut emission = Vec3::ZERO;
+    if rho > BH_DISK_INNER && rho < BH_DISK_OUTER {
+        let r01 = (rho - BH_DISK_INNER) / (BH_DISK_OUTER - BH_DISK_INNER);
+        // Giro diferencial: el ángulo avanza más rápido en los anillos de adentro.
+        let phi = (y / BH_DISK_COS_TILT).atan2(x) - time * BH_DISK_SPIN / rho;
+        let swirl = 0.55 + 0.45 * fbm(Vec3::new(phi.cos() * 2.0, phi.sin() * 2.0, rho * 60.0), 3, 808);
+        // Efecto Doppler: el lado que viene hacia nosotros (x > 0) brilla más.
+        let doppler = 1.0 + 0.6 * (x / rho);
+        let edge = smoothstep(0.0, 0.15, r01) * (1.0 - smoothstep(0.6, 1.0, r01));
+        // La mitad de atrás del disco (y > 0) queda tapada por la sombra.
+        let behind = y > 0.0 && theta < BH_SHADOW;
+        if !behind {
+            emission += BH_DISK_HOT.lerp(BH_DISK_COOL, r01) * (edge * swirl * doppler * 1.6);
+        }
+    }
+
+    // --- Anillo de fotones: luz que dio vueltas al agujero, justo afuera de la sombra ---
+    let ring = (-((theta - BH_SHADOW * 1.12) / (BH_SHADOW * 0.12)).powi(2)).exp();
+    emission += BH_DISK_HOT * (ring * 0.9);
+
+    BlackHole { dir: bent, in_shadow: theta < BH_SHADOW, emission }
 }
 
 // ---------------------------------------------------------------------------

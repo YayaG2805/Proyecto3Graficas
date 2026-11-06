@@ -357,6 +357,13 @@ fn snapshot() {
     g.renderer.save_ppm("snap_cometa.ppm").expect("no se pudo guardar");
     println!("snap_cometa.ppm: cometa a {:.0} del sol", comet.length());
 
+    // Agujero negro lejano (en el cielo): se apunta un poco abajo para que la nave no lo tape.
+    let from = Vec3::new(0.0, 25.0, 95.0);
+    aim_ship_at(&mut g, from, from + shaders::BH_DIR.normalized() * 100.0 - Vec3::UP * 22.0);
+    g.render();
+    g.renderer.save_ppm("snap_agujero_negro.ppm").expect("no se pudo guardar");
+    println!("snap_agujero_negro.ppm: listo");
+
     // Comparación para la demo: la vista del cinturón con culling (C) y LOD (L) prendidos y apagados.
     // Demuestra que las dos técnicas cambian el trabajo que hace el renderer.
     aim_ship(&mut g, BELT_SHOT, 0);
