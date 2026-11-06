@@ -110,6 +110,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C; en el cinturón: 886 de 1508 objetos dibujados con C, todos sin C | `Renderer::sphere_visible` |
 | LOD según distancia + contador | 8 | ✅ tecla L; en el cinturón: 22 800 triángulos con L contra 385 680 sin L (`--snapshot` imprime la comparación) | `Renderer::draw_lods` |
 | Cinturón de asteroides (1500 rocas con semilla fija `ASTEROID_SEED`, 4 formas × 3 LODs, órbita de Kepler) | – | ✅ entre Krypton y Gotham | `exotics.rs` |
+| Cometa en órbita elíptica (ecuación de Kepler con Newton) con cola que siempre apunta lejos del sol | – | ✅ también sale en el radar; la cola crece cerca del sol | `exotics.rs` (`Comet`) |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |

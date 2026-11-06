@@ -1,10 +1,11 @@
-//! OBJETOS EXÓTICOS del sistema (Diego, D7): el cinturón de asteroides.
+//! OBJETOS EXÓTICOS del sistema (Diego, D7): el cinturón de asteroides y el cometa.
 //!
 //! El cinturón es la prueba de los contadores: son muchísimos objetos pequeños, así que con
 //! el culling (C) y el LOD (L) apagados los triángulos que entran al pipeline suben mucho.
+//! El cometa sigue una órbita elíptica de Kepler y su cola siempre apunta lejos del sol.
 
 use crate::math::{Mat4, Vec3};
-use crate::mesh::Mesh;
+use crate::mesh::{Mesh, Vertex};
 use crate::noise::{fbm, hash01};
 use crate::renderer::{Fragment, FragmentShader, Renderer, Uniforms};
 use crate::shaders::lambert;
@@ -127,9 +128,200 @@ impl FragmentShader for AsteroidShader {
     }
 }
 
+// ---------------------------------------------------------------------------
+// COMETA: órbita ELÍPTICA de Kepler con el sol en un foco.
+//   M = M0 + n·t           (anomalía media: crece parejo con el tiempo, n = 2π / periodo)
+//   E − e·sen(E) = M        (ecuación de Kepler: se resuelve con el método de Newton)
+//   x = a·(cos E − e),  z = b·sen E,  con b = a·√(1 − e²)
+// Así el cometa va lento lejos del sol y muy rápido cuando pasa cerca (segunda ley de Kepler).
+// ---------------------------------------------------------------------------
+/// Semieje mayor de la elipse (qué tan grande es la órbita).
+const COMET_A: f32 = 120.0;
+/// Excentricidad: 0 = círculo, cerca de 1 = elipse muy alargada (perihelio 30, afelio 210).
+const COMET_E: f32 = 0.75;
+/// Segundos que tarda en dar una vuelta completa.
+const COMET_PERIOD: f32 = 240.0;
+/// Anomalía media al inicio: un poco antes del perihelio, para verlo acercarse al sol.
+const COMET_M0: f32 = -0.6;
+/// Inclinación del plano de la órbita y hacia dónde apunta su eje mayor (radianes).
+const COMET_INCLINATION: f32 = 0.35;
+const COMET_ORIENTATION: f32 = 2.0;
+/// Radio del núcleo de hielo y del halo (coma) que lo rodea.
+const COMET_NUCLEUS: f32 = 0.8;
+const COMET_COMA: f32 = 2.6;
+/// Largo y ancho de la cola a la distancia de referencia; cerca del sol crece.
+const COMET_TAIL_LENGTH: f32 = 30.0;
+const COMET_TAIL_WIDTH: f32 = 2.2;
+const COMET_TAIL_REF_DIST: f32 = 60.0;
+/// Brillo de la cola (es aditiva: se suma a lo que haya detrás).
+const COMET_TAIL_BRIGHTNESS: f32 = 1.3;
+const COMET_ICE: Vec3 = Vec3::new(0.70, 0.80, 0.90);
+const COMET_GLOW_CORE: Vec3 = Vec3::new(0.85, 0.95, 1.0);
+const COMET_GLOW_TAIL: Vec3 = Vec3::new(0.25, 0.55, 1.0);
+
+/// Malla de la cola: un cono que se ENSANCHA hacia +Z (lejos del núcleo), abierto al final.
+/// uv = (vuelta alrededor, de 0 a 1; avance a lo largo, de 0 a 1).
+fn tail_mesh(segments: u32) -> Mesh {
+    // (avance z, radio relativo)
+    let rings = [(0.0, 0.25), (0.08, 0.55), (0.3, 0.8), (0.65, 0.95), (1.0, 1.05)];
+    let n = segments as usize;
+    let mut mesh = Mesh::default();
+    for &(z, r) in &rings {
+        for j in 0..n {
+            let a = j as f32 / n as f32 * std::f32::consts::TAU;
+            mesh.vertices.push(Vertex {
+                position: Vec3::new(a.cos() * r, a.sin() * r, z),
+                normal: Vec3::ZERO,
+                uv: (j as f32 / n as f32, z),
+                tangent: Vec3::ZERO,
+            });
+        }
+    }
+    for i in 0..rings.len() - 1 {
+        for j in 0..n {
+            let k = (j + 1) % n;
+            let (p00, p01) = ((i * n + j) as u32, (i * n + k) as u32);
+            let (p10, p11) = (((i + 1) * n + j) as u32, ((i + 1) * n + k) as u32);
+            mesh.indices.extend([p00, p01, p11, p00, p11, p10]);
+        }
+    }
+    mesh.recompute_normals();
+    mesh.compute_bounds();
+    mesh
+}
+
+pub struct Comet {
+    nucleus: Vec<Mesh>,
+    coma: Mesh,
+    tail: Mesh,
+}
+
+impl Comet {
+    pub fn new() -> Comet {
+        Comet {
+            nucleus: [3, 2, 1].iter().map(|&s| Mesh::icosphere(s, &|d| rock_shape(d, 77))).collect(),
+            coma: Mesh::icosphere(2, &|_| 1.0),
+            tail: tail_mesh(24),
+        }
+    }
+
+    /// Posición del cometa en el tiempo t (el sol está en el origen, en un foco de la elipse).
+    pub fn position(&self, t: f32) -> Vec3 {
+        let n = std::f32::consts::TAU / COMET_PERIOD;
+        let m = COMET_M0 + n * t;
+        // Newton: E ← E − (E − e·sen E − M) / (1 − e·cos E). Converge en pocas vueltas.
+        let mut e_anom = m;
+        for _ in 0..6 {
+            e_anom -= (e_anom - COMET_E * e_anom.sin() - m) / (1.0 - COMET_E * e_anom.cos());
+        }
+        let b = COMET_A * (1.0 - COMET_E * COMET_E).sqrt();
+        let p = Vec3::new(COMET_A * (e_anom.cos() - COMET_E), 0.0, b * e_anom.sin());
+        // Inclinar el plano de la órbita y girarlo para que no quede alineado con los planetas.
+        (Mat4::rotation_y(COMET_ORIENTATION) * Mat4::rotation_x(COMET_INCLINATION)).transform_point(p)
+    }
+
+    /// Qué tan activo está: 1 a la distancia de referencia, más cerca del sol más brillante.
+    fn activity(&self, pos: Vec3) -> f32 {
+        (COMET_TAIL_REF_DIST / pos.length().max(1.0)).clamp(0.7, 2.0)
+    }
+
+    /// El núcleo (opaco): se dibuja con los demás objetos sólidos.
+    pub fn draw_nucleus(&self, r: &mut Renderer, t: f32) {
+        let model = Mat4::translation(self.position(t)) * Mat4::rotation_y(t * 0.5) * Mat4::scale(Vec3::splat(COMET_NUCLEUS));
+        r.draw_lods(&self.nucleus, &model, Arc::new(CometIceShader));
+    }
+
+    /// La coma y la cola (aditivas): se dibujan DESPUÉS de todo lo opaco.
+    pub fn draw_glow(&self, r: &mut Renderer, t: f32) {
+        let pos = self.position(t);
+        let activity = self.activity(pos);
+
+        // Base de la cola: su +Z local apunta LEJOS del sol (from_basis usa -Z como "adelante").
+        let away = pos.normalized();
+        let toward_sun = -away;
+        let side = if toward_sun.cross(Vec3::UP).length() > 1e-3 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
+        let right = toward_sun.cross(side).normalized();
+        let up = right.cross(toward_sun);
+        let width = COMET_TAIL_WIDTH * activity.sqrt();
+        let length = COMET_TAIL_LENGTH * activity;
+        let tail = Mat4::from_basis(right, up, toward_sun, pos) * Mat4::scale(Vec3::new(width, width, length));
+        r.draw_mesh_additive(&self.tail, &tail, Arc::new(CometTailShader { activity, right, up }));
+
+        let coma = Mat4::translation(pos) * Mat4::scale(Vec3::splat(COMET_COMA));
+        r.draw_mesh_additive(&self.coma, &coma, Arc::new(CometComaShader { activity }));
+    }
+}
+
+/// Núcleo de hielo sucio: Lambert con un poco de brillo especular.
+struct CometIceShader;
+
+impl FragmentShader for CometIceShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let n = (fbm(f.local_pos * 3.0, 3, 77) * 0.5 + 0.5).clamp(0.0, 1.0);
+        let l = (u.light_pos - f.world_pos).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let spec = f.normal.dot((l + v).normalized()).max(0.0).powf(30.0);
+        COMET_ICE * (0.6 + 0.4 * n) * lambert(f, u, 0.15) + Vec3::splat(spec * 0.4)
+    }
+}
+
+/// Halo alrededor del núcleo: brilla donde la esfera mira a la cámara (el centro)
+/// y se desvanece hacia la orilla, así no se ve el borde de la esfera.
+struct CometComaShader {
+    activity: f32,
+}
+
+impl FragmentShader for CometComaShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let facing = f.normal.dot(v).abs();
+        COMET_GLOW_CORE * (facing.powf(4.0) * 0.35 * self.activity)
+    }
+}
+
+/// Cola: más brillante junto al núcleo, se apaga hacia el final y tiene estrías de gas
+/// que se alejan del sol con el tiempo (animada).
+/// OJO: la cola se escala distinto en largo que en ancho, y así la normal interpolada sale
+/// torcida (habría que usar la inversa transpuesta). Por eso la normal se reconstruye aquí:
+/// en un cono, la normal apunta hacia afuera desde el eje = (x, y) local en la base (right, up).
+struct CometTailShader {
+    activity: f32,
+    right: Vec3,
+    up: Vec3,
+}
+
+impl FragmentShader for CometTailShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let along = f.uv.1.clamp(0.0, 1.0);
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let n = (self.right * f.local_pos.x + self.up * f.local_pos.y).normalized();
+        let facing = n.dot(v).abs().powf(1.2);
+        let fade = (1.0 - along).powf(1.6);
+        let streaks = 0.6 + 0.6 * fbm(Vec3::new(f.uv.0 * 10.0, along * 3.0 - u.time * 0.4, 0.0), 2, 91).max(0.0);
+        let color = COMET_GLOW_CORE.lerp(COMET_GLOW_TAIL, (along * 2.0).min(1.0));
+        color * (facing * fade * streaks * COMET_TAIL_BRIGHTNESS * self.activity)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_cometa_sigue_una_elipse_con_el_sol_en_el_foco() {
+        let comet = Comet::new();
+        // A lo largo de una vuelta, su distancia al sol va del perihelio a(1-e) al afelio a(1+e).
+        let (mut near, mut far) = (f32::MAX, 0.0f32);
+        for k in 0..2400 {
+            let d = comet.position(k as f32 * COMET_PERIOD / 2400.0).length();
+            near = near.min(d);
+            far = far.max(d);
+        }
+        assert!((near - COMET_A * (1.0 - COMET_E)).abs() < 0.5);
+        assert!((far - COMET_A * (1.0 + COMET_E)).abs() < 0.5);
+        // Y después de un periodo vuelve al mismo lugar.
+        assert!((comet.position(0.0) - comet.position(COMET_PERIOD)).length() < 0.01);
+    }
 
     #[test]
     fn misma_semilla_mismas_rocas() {

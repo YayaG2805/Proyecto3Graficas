@@ -17,7 +17,7 @@ mod shaders;
 mod ship;
 mod texture;
 
-use exotics::{AsteroidBelt, ASTEROID_SEED};
+use exotics::{AsteroidBelt, Comet, ASTEROID_SEED};
 use hud::{Canvas, RadarBlip};
 use interaction::GameState;
 use math::{Mat4, Vec3};
@@ -82,6 +82,8 @@ struct Game {
     scene: Scene,
     /// Cinturón de asteroides entre Krypton y Gotham (exotics.rs).
     asteroids: AsteroidBelt,
+    /// Cometa en órbita elíptica (exotics.rs).
+    comet: Comet,
     ship: Ship,
     ship_mesh: Mesh,
     /// true si cargo el halcon, false si estamos con el modelo de respaldo
@@ -143,6 +145,7 @@ impl Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene: Scene::new(),
             asteroids: AsteroidBelt::new(ASTEROID_SEED),
+            comet: Comet::new(),
             ship,
             ship_mesh,
             ship_is_halcon,
@@ -226,7 +229,7 @@ impl Game {
     /// HUD dibujado en NUESTRO framebuffer: el radar y el fondo de la ficha.
     /// Va después del sombreado porque se pinta encima de la imagen final.
     fn draw_overlay(&mut self) {
-        let blips: Vec<RadarBlip> = self
+        let mut blips: Vec<RadarBlip> = self
             .scene
             .bodies
             .iter()
@@ -238,6 +241,13 @@ impl Game {
                 highlight: i == self.state.warp_target,
             })
             .collect();
+        // El cometa también sale en el radar, como un punto celeste pequeño.
+        blips.push(RadarBlip {
+            offset: self.comet.position(self.time) - self.ship.position,
+            size: 1.5,
+            color: Vec3::new(0.6, 0.9, 1.0),
+            highlight: false,
+        });
         let mut cv = Canvas { px: &mut self.renderer.color, w: RENDER_W, h: RENDER_H };
         hud::draw_radar(&mut cv, self.ship.forward(), &blips);
         if self.card_body.is_some() {
@@ -257,6 +267,7 @@ impl Game {
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         self.asteroids.draw(&mut self.renderer, self.time);
+        self.comet.draw_nucleus(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
         // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
         let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
@@ -265,6 +276,10 @@ impl Game {
             Arc::new(ShipShader { base: SHIP_COLOR, boost: self.ship.boost })
         };
         self.renderer.draw_mesh(&self.ship_mesh, &model, ship_shader);
+
+        // Lo aditivo (la cola y el halo del cometa, la llama del turbo) va SIEMPRE al final,
+        // porque necesita el z-buffer completo de lo opaco.
+        self.comet.draw_glow(&mut self.renderer, self.time);
 
         // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
         if self.ship.boost > 0.01 {
@@ -331,10 +346,19 @@ fn snapshot() {
         );
     }
 
-    // Comparación para la demo: la vista del cinturón con culling (C) y LOD (L) prendidos y apagados.
-    // Demuestra que las dos técnicas cambian el trabajo que hace el renderer.
+    // Cometa visto de lado, para que se note que la cola apunta lejos del sol.
     g.time = 0.0;
     g.ship.boost = 0.0;
+    let comet = g.comet.position(g.time);
+    let away = comet.normalized();
+    let side = away.cross(Vec3::UP).normalized();
+    aim_ship_at(&mut g, comet + side * 28.0 + away * 6.0, comet + away * 9.0);
+    g.render();
+    g.renderer.save_ppm("snap_cometa.ppm").expect("no se pudo guardar");
+    println!("snap_cometa.ppm: cometa a {:.0} del sol", comet.length());
+
+    // Comparación para la demo: la vista del cinturón con culling (C) y LOD (L) prendidos y apagados.
+    // Demuestra que las dos técnicas cambian el trabajo que hace el renderer.
     aim_ship(&mut g, BELT_SHOT, 0);
     for (culling, lod) in [(true, true), (false, true), (true, false), (false, false)] {
         g.renderer.frustum_culling = culling;
@@ -361,8 +385,13 @@ const BELT_SHOT: Vec3 = Vec3::new(0.0, 1.5, 88.0);
 
 /// Pone la nave en `pos` mirando al cuerpo `aim`, con la cámara ya detrás de ella (para el snapshot).
 fn aim_ship(g: &mut Game, pos: Vec3, aim: usize) {
-    g.ship.position = pos;
     let target = g.scene.body_position(aim, g.time);
+    aim_ship_at(g, pos, target);
+}
+
+/// Pone la nave en `pos` mirando al punto `target`, con la cámara ya detrás de ella.
+fn aim_ship_at(g: &mut Game, pos: Vec3, target: Vec3) {
+    g.ship.position = pos;
     let d = (target - pos).normalized();
     g.ship.yaw = (-d.x).atan2(-d.z);
     g.ship.pitch = d.y.asin();
