@@ -46,6 +46,12 @@ const FLASH_SIZE: f32 = 0.16;
 const FLASH_RED: Vec3 = Vec3::new(0.80, 0.06, 0.04);
 const FLASH_TRAIL: Vec3 = Vec3::new(1.0, 0.85, 0.15);
 
+// --- Batman (quieto en la azotea más alta de Gotham) ---
+/// Tamaño de Batman. Es más grande que un edificio para que se vea desde la nave.
+const BATMAN_SIZE: f32 = 0.22;
+const BATMAN_SUIT: Vec3 = Vec3::new(0.22, 0.22, 0.26);
+const BATMAN_CAPE: Vec3 = Vec3::new(0.04, 0.04, 0.05);
+
 // --- Estela ---
 /// Cuántas posiciones anteriores forman la estela.
 const TRAIL_POINTS: usize = 20;
@@ -80,6 +86,28 @@ impl Creature {
     pub fn position(&self, scene: &Scene, t: f32) -> Vec3 {
         self.model(scene, t).transform_point(Vec3::ZERO)
     }
+}
+
+/// Trayectoria de quien está quieto: no se mueve en el marco de su planeta.
+fn still(_t: f32) -> Mat4 {
+    Mat4::identity()
+}
+
+/// El punto más alto de un planeta: el vértice de su malla más detallada más lejos del centro
+/// (la deformación ya subió montañas o edificios). Devuelve (dirección, distancia al centro).
+fn highest_point(scene: &Scene, i: usize) -> (Vec3, f32) {
+    let b = &scene.bodies[i];
+    let top = b.lods[0].vertices.iter().map(|v| v.position).fold(Vec3::ZERO, |best, p| {
+        if p.length() > best.length() { p } else { best }
+    });
+    (top.normalized(), top.length() * b.radius)
+}
+
+/// Lugar fijo de una figura PARADA sobre la superficie: pies en `dir · radio`, "arriba" = `dir`.
+fn standing_on(dir: Vec3, radius: f32, size: f32) -> Mat4 {
+    // Cualquier dirección perpendicular a "arriba" sirve como "adelante".
+    let side = if dir.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
+    oriented(dir * (radius + size * FEET), dir, dir.cross(side))
 }
 
 /// Matriz que pone a alguien mirando hacia `forward` con su "arriba" hacia `up` en `pos`.
@@ -203,6 +231,21 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             trail_step: 0.03,
         });
     }
+    if let Some(gotham) = body(scene, "Gotham") {
+        let (dir, roof) = highest_point(scene, gotham);
+        list.push(Creature {
+            name: "Batman",
+            home: gotham,
+            lods: load_hero("batman", placeholder_figure),
+            // Traje gris adelante y capa negra atrás.
+            shader: Arc::new(HeroShader { main: BATMAN_SUIT, back: BATMAN_CAPE, back_z: 0.05 }),
+            path: still,
+            place: standing_on(dir, roof, BATMAN_SIZE),
+            size: BATMAN_SIZE,
+            trail: None,
+            trail_step: 0.0,
+        });
+    }
     list
 }
 
@@ -302,6 +345,23 @@ mod tests {
             let d = (flash.position(&scene, t) - scene.body_position(flash.home, t)).length();
             assert!((d - (radius + FLASH_SIZE * FEET)).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn batman_esta_parado_en_la_azotea_mas_alta_y_gira_con_gotham() {
+        let scene = Scene::new();
+        let list = create_creatures(&scene);
+        let bat = find(&list, "Batman");
+        let (_, roof) = highest_point(&scene, bat.home);
+        // Ningún vértice de Gotham está más alto que la azotea elegida.
+        let radius = scene.bodies[bat.home].radius;
+        assert!(scene.bodies[bat.home].lods[0].vertices.iter().all(|v| v.position.length() * radius <= roof + 1e-4));
+        for t in [0.0, 7.0, 30.0] {
+            let d = (bat.position(&scene, t) - scene.body_position(bat.home, t)).length();
+            assert!((d - (roof + BATMAN_SIZE * FEET)).abs() < 1e-3);
+        }
+        // Gira con el planeta: en otro tiempo está en otro lugar del mundo.
+        assert!((bat.position(&scene, 0.0) - bat.position(&scene, 5.0)).length() > 0.1);
     }
 
     #[test]

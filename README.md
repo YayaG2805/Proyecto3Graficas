@@ -114,6 +114,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Agujero negro lejano: lente gravitacional `β = θ − θE²/θ`, sombra, anillo de fotones y disco de acreción animado | – | ✅ en el cielo, arriba a la derecha del sol al empezar | `black_hole` en `shaders.rs` (`BH_*`) |
 | Superman: vuela en loops alrededor de Krypton (1.6 radios, sube y baja) con estela que se desvanece | – | 🟡 movimiento y estela listos; falta el modelo de Blender `assets/heroes/superman.obj` (mientras, figura provisional) | `creatures.rs`, `Renderer::draw_line_strip` |
 | Flash: corre por el ecuador de Central City (una vuelta cada ~2 s) con estela amarilla | – | 🟡 movimiento y estela listos; falta `assets/heroes/flash.obj` | `creatures.rs` (`flash_path`) |
+| Batman: quieto en la azotea más alta de Gotham (el vértice más alto de su malla), gira con el planeta | – | 🟡 posición lista; falta `assets/heroes/batman.obj` y la batiseñal de Sando (S8) | `creatures.rs` (`highest_point`, `standing_on`) |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |
