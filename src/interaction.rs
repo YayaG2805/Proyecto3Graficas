@@ -103,7 +103,7 @@ pub fn update(state: &mut GameState, ship: &mut Ship, scene: &Scene, input: &Shi
     // shift solo suelta cuando se aprieta de nuevo, si no al enganchar con shift abajo se soltaria solo
     let boost_pressed = input.boost && !state.boost_was_down;
     state.boost_was_down = input.boost;
-    if !state.photo_mode {
+    if !state.photo_mode && !ship.warping() {
         if ship.orbit_body().is_some() {
             if input.orbit_toggle || boost_pressed {
                 ship.release_orbit();
@@ -114,9 +114,19 @@ pub fn update(state: &mut GameState, ship: &mut Ship, scene: &Scene, input: &Shi
             }
         }
     }
-    state.orbit_lock = ship.orbit_body();
 
-    // paso 5: con P entramos o salimos del modo foto
+    // paso 5: tab arranca el viaje al destino, y si ya vamos viajando lo cancela
+    if input.warp && !state.photo_mode {
+        if ship.warping() {
+            ship.cancel_warp();
+        } else {
+            ship.start_warp(state.warp_target, scene, t);
+        }
+    }
+    state.orbit_lock = ship.orbit_body();
+    state.warp = ship.warp_effect();
+
+    // paso 6: con P entramos o salimos del modo foto
     if input.photo {
         state.photo_mode = !state.photo_mode;
     }
@@ -226,6 +236,85 @@ mod tests {
         tick(&mut state, &mut ship, &ShipInput::default());
         tick(&mut state, &mut ship, &hold_shift);
         assert_eq!(state.orbit_lock, None);
+    }
+
+    #[test]
+    fn tab_arranca_y_cancela_el_viaje() {
+        let scene = Scene::new();
+        let mut state = GameState::new();
+        let press_tab = ShipInput { warp: true, ..Default::default() };
+        let press_f = ShipInput { orbit_toggle: true, ..Default::default() };
+        let mut ship = ship_above(&scene, 3, 5.0);
+        let tick = |state: &mut GameState, ship: &mut Ship, input: &ShipInput| update(state, ship, &scene, input, 0.0, 0.016);
+
+        // el destino por defecto es themyscira y gotham esta lejos
+        tick(&mut state, &mut ship, &press_tab);
+        assert!(ship.warping());
+
+        // viajando la f no engancha nada
+        tick(&mut state, &mut ship, &press_f);
+        assert_eq!(state.orbit_lock, None);
+
+        tick(&mut state, &mut ship, &press_tab);
+        assert!(!ship.warping());
+    }
+
+    #[test]
+    fn despues_de_llegar_da_tiempo_de_apretar_la_f() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut shortest = f32::MAX;
+
+        for to in 1..=5 {
+            let from = if to == 5 { 1 } else { 5 };
+            let mut state = GameState::new();
+            state.warp_target = to;
+            let mut ship = ship_above(&scene, from, 5.0);
+            let mut t = 0.0;
+            update(&mut state, &mut ship, &scene, &ShipInput { warp: true, ..Default::default() }, t, dt);
+            while ship.warping() {
+                t += dt;
+                ship.update(ShipInput::default(), dt, &scene, t);
+            }
+
+            // ya llegamos y no se toca nada: cuanto tiempo sigue disponible la orbita
+            update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
+            assert_eq!(state.nearest, Some(to));
+            assert!(orbit_in_range(&state, &scene));
+            let mut in_range = 0.0;
+            while orbit_in_range(&state, &scene) && in_range < 30.0 {
+                t += dt;
+                in_range += dt;
+                ship.update(ShipInput::default(), dt, &scene, t);
+                update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
+            }
+            shortest = shortest.min(in_range);
+        }
+        println!("despues de llegar la f sigue disponible al menos {shortest:.1} s");
+        assert!(shortest > 3.0);
+    }
+
+    #[test]
+    fn tab_desde_una_orbita_la_suelta_y_viaja() {
+        let scene = Scene::new();
+        let mut state = GameState::new();
+        let mut ship = ship_above(&scene, 3, 5.0);
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, 0.016);
+        assert_eq!(state.orbit_lock, Some(3));
+
+        update(&mut state, &mut ship, &scene, &ShipInput { warp: true, ..Default::default() }, 0.0, 0.016);
+        assert_eq!(state.orbit_lock, None);
+        assert!(ship.warping());
+    }
+
+    #[test]
+    fn en_modo_foto_tab_no_hace_nada() {
+        let scene = Scene::new();
+        let mut state = GameState::new();
+        state.photo_mode = true;
+        let mut ship = ship_above(&scene, 3, 5.0);
+        update(&mut state, &mut ship, &scene, &ShipInput { warp: true, ..Default::default() }, 0.0, 0.016);
+        assert!(!ship.warping());
     }
 
     #[test]

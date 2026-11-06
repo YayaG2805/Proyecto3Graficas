@@ -363,9 +363,29 @@ fn main() {
             18,
             Color::LIGHTGRAY,
         );
+        // el destino del warp y si ya vamos viajando
+        d.draw_text(
+            &format!(
+                "destino [1-5]: {}   warp [Tab]: {}",
+                game.scene.bodies[game.state.warp_target].name,
+                if game.ship.warping() { "viajando" } else { "listo" }
+            ),
+            10,
+            78,
+            18,
+            Color::LIGHTGRAY,
+        );
         if show_help {
+            // son dos lineas porque en una ya no cabia en la ventana
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   F orbita   G gravedad   P foto   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   H ocultar ayuda",
+                10,
+                WINDOW_H - 50,
+                18,
+                Color::GOLD,
+            );
+            d.draw_text(
+                "Tab warp   1-5 destino   F orbita   G gravedad   P foto   O orbitas   N normales   C culling   L LOD",
                 10,
                 WINDOW_H - 28,
                 18,
@@ -414,17 +434,26 @@ mod tests {
     }
 
     #[test]
-    fn el_efecto_warp_viene_del_estado_y_no_de_la_tecla() {
+    fn el_efecto_warp_lo_prende_el_viaje() {
         let mut g = Game::new();
         let dt = 1.0 / 60.0;
 
-        // apretar tab solo ya no prende el efecto
-        g.update(ShipInput { warp: true, ..Default::default() }, dt);
+        // sin viaje no hay efecto
+        g.update(ShipInput::default(), dt);
         assert_eq!(g.warp, 0.0);
 
-        // lo q mande es lo q tenga el estado
-        g.state.warp = 0.7;
-        g.update(ShipInput::default(), dt);
-        assert_eq!(g.warp, 0.7);
+        // tab arranca el viaje, pero el efecto no prende hasta q termine de alinearse
+        g.update(ShipInput { warp: true, ..Default::default() }, dt);
+        assert!(g.ship.warping());
+        assert_eq!(g.warp, 0.0);
+
+        // a medio viaje el efecto llega alto, y lo q llega al render es lo del estado
+        let mut strongest = 0.0f32;
+        for _ in 0..300 {
+            g.update(ShipInput::default(), dt);
+            assert_eq!(g.warp, g.state.warp);
+            strongest = strongest.max(g.warp);
+        }
+        assert!(strongest > 0.5);
     }
 }

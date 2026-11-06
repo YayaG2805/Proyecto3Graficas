@@ -75,9 +75,58 @@ const ORBIT_BLEND_RESPONSE: f32 = 4.0;
 // en orbita la camara mira un poco hacia abajo pa ver la superficie, mas alto = mas inclinada
 const ORBIT_CAMERA_TILT: f32 = 3.0;
 
+// --- warp ---
+// velocidad de crucero y con cuanta aceleracion llega a ella (tarda 1 segundo)
+const WARP_SPEED: f32 = 90.0;
+const WARP_ACCEL: f32 = 90.0;
+// cuanto dura la fase de alinearse antes de salir
+const WARP_ALIGN_TIME: f32 = 1.0;
+// q tan rapido apunta al destino mientras se alinea y mientras viaja
+const WARP_ALIGN_RESPONSE: f32 = 5.0;
+const WARP_STEER_RESPONSE: f32 = 6.0;
+// empieza a frenar a esta distancia del centro del destino y termina a esta otra, en radios
+// a 2 radios del centro queda bien adentro del rango de la f, asi da tiempo de apretarla
+// antes de q el planeta se aleje
+const WARP_BRAKE_RADII: f32 = 6.0;
+const WARP_ARRIVE_RADII: f32 = 2.0;
+// cuanto margen deja al pasar junto a otro cuerpo, encima de su colision
+const WARP_CLEARANCE: f32 = 6.0;
+// por seguridad, si un viaje tarda mas q esto se corta
+const WARP_MAX_TIME: f32 = 20.0;
+// si cancelan el viaje la nave queda con esta velocidad como maximo, pa poder controlarla
+const WARP_CANCEL_SPEED: f32 = 25.0;
+// q tan rapido prende y apaga el efecto visual
+const WARP_EFFECT_RESPONSE: f32 = 3.0;
+
+// las fases de un viaje, en orden
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum WarpPhase {
+    Align,
+    Accelerate,
+    Cruise,
+    Brake,
+}
+
+// un viaje en curso
+struct WarpTrip {
+    /// indice del mundo destino
+    target: usize,
+    phase: WarpPhase,
+    /// cuanto lleva el viaje, en segundos
+    elapsed: f32,
+    /// a q velocidad va, en brake es relativa al planeta
+    speed: f32,
+}
+
 // el radio donde empieza la colision de un cuerpo, la deformacion de los planetas llega hasta un 12%
 fn collision_radius(radius: f32) -> f32 {
     radius * 1.12 + 0.8
+}
+
+// la velocidad de un cuerpo, comparando donde estaba hace un momentito
+fn body_velocity(scene: &Scene, i: usize, t: f32) -> Vec3 {
+    let moment = 0.01;
+    (scene.body_position(i, t) - scene.body_position(i, t - moment)) / moment
 }
 
 // un vector cualquiera q forme angulo recto con v, pa cuando no hay otra referencia
@@ -126,6 +175,10 @@ pub struct Ship {
     // la ultima orientacion de orbita, se guarda pa poder regresar suave despues de soltarla
     orbit_forward: Vec3,
     orbit_up: Vec3,
+    // el viaje actual, None = sin viaje
+    warp_trip: Option<WarpTrip>,
+    // intensidad del efecto visual, de 0 a 1
+    warp_effect: f32,
 }
 
 // calcula la nueva velocidad de giro de un eje, sirve igual pa yaw y pa pitch
@@ -140,8 +193,6 @@ fn next_spin_rate(rate: f32, input: f32, accel: f32, max: f32, dt: f32) -> f32 {
 }
 
 /// Lo que el jugador presiona este cuadro (main.rs lo llena desde raylib).
-// el allow se quita cuando a6 lea la tecla q falta (tab)
-#[allow(dead_code)]
 #[derive(Default, Clone, Copy)]
 pub struct ShipInput {
     pub thrust: f32, // -1..1  (W / S)
@@ -160,7 +211,7 @@ pub struct ShipInput {
 
 impl Ship {
     pub fn new(position: Vec3) -> Ship {
-        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true, orbit: None, frame_blend: 0.0, orbit_forward: Vec3::ZERO, orbit_up: Vec3::UP }
+        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true, orbit: None, frame_blend: 0.0, orbit_forward: Vec3::ZERO, orbit_up: Vec3::UP, warp_trip: None, warp_effect: 0.0 }
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -224,10 +275,8 @@ impl Ship {
         // si iba mirando recto al planeta no queda casi nada, agarramos cualquier direccion valida
         let heading = if flat.length() > 0.1 { flat.normalized() } else { any_perpendicular(normal) };
 
-        // paso 3: la velocidad del planeta, comparando donde estaba hace un momentito
-        let moment = 0.01;
-        let planet_velocity = (center - scene.body_position(i, t - moment)) / moment;
-        let relative = self.velocity - planet_velocity;
+        // paso 3: la velocidad con la q vamos respecto al planeta, q tambien se esta moviendo
+        let relative = self.velocity - body_velocity(scene, i, t);
 
         // paso 4: la orbita arranca con el movimiento q ya traia, asi no se siente un frenon
         self.orbit = Some(Orbit {
@@ -313,6 +362,159 @@ impl Ship {
         self.update_visuals(false, dt);
     }
 
+    /// si hay un viaje en curso
+    pub fn warping(&self) -> bool {
+        self.warp_trip.is_some()
+    }
+
+    /// intensidad del efecto visual del warp, de 0 a 1
+    pub fn warp_effect(&self) -> f32 {
+        self.warp_effect
+    }
+
+    /// empieza un viaje al mundo i, si ya estamos cerca de ese mundo no hace nada
+    pub fn start_warp(&mut self, i: usize, scene: &Scene, t: f32) {
+        let distance = (scene.body_position(i, t) - self.position).length();
+        if distance < WARP_BRAKE_RADII * scene.bodies[i].radius {
+            return;
+        }
+        // si veniamos en orbita la soltamos, el viaje necesita manejar la nave
+        self.release_orbit();
+        self.yaw_rate = 0.0;
+        self.pitch_rate = 0.0;
+        self.warp_trip = Some(WarpTrip { target: i, phase: WarpPhase::Align, elapsed: 0.0, speed: 0.0 });
+    }
+
+    /// corta el viaje donde vaya, la nave sigue volando pero a una velocidad q se pueda controlar
+    pub fn cancel_warp(&mut self) {
+        self.warp_trip = None;
+        let speed = self.velocity.length();
+        if speed > WARP_CANCEL_SPEED {
+            self.velocity = self.velocity / speed * WARP_CANCEL_SPEED;
+        }
+    }
+
+    // a q punto hay q apuntar ahorita pa llegar al destino sin chocar
+    fn warp_aim(&self, target: usize, scene: &Scene, t: f32) -> Vec3 {
+        // paso 1: el planeta se mueve, asi q apuntamos a donde va a estar cuando lleguemos
+        // el tiempo q falta es la distancia entre la velocidad de crucero, y se recalcula cada cuadro
+        let eta = (scene.body_position(target, t) - self.position).length() / WARP_SPEED;
+        let aim = scene.body_position(target, t + eta);
+        let path = aim - self.position;
+        let length = path.length().max(1e-4);
+        let dir = path / length;
+
+        // paso 2: buscar el primer cuerpo q nos quede en medio del camino
+        let mut waypoint = aim;
+        let mut first_along_path = f32::MAX;
+        for (j, b) in scene.bodies.iter().enumerate() {
+            if j == target {
+                continue;
+            }
+            // cuanto avanzamos por el camino hasta quedar a la par del cuerpo
+            let center = scene.body_position(j, t);
+            let along = (center - self.position).dot(dir);
+            // si queda atras o despues del destino no estorba
+            if along <= 0.0 || along >= length || along >= first_along_path {
+                continue;
+            }
+            // lo mas cerca q pasariamos del cuerpo yendo recto
+            let closest = self.position + dir * along;
+            let away = closest - center;
+            let clearance = collision_radius(b.radius) + WARP_CLEARANCE;
+            if away.length() < clearance {
+                // paso 3: en vez de ir recto, apuntamos a un punto al lado del cuerpo
+                // si vamos recto contra su centro no hay lado, entonces agarramos cualquiera
+                let side = if away.length() > 0.01 { away.normalized() } else { any_perpendicular(dir) };
+                waypoint = center + side * clearance;
+                first_along_path = along;
+            }
+        }
+        waypoint
+    }
+
+    // gira la nariz hacia una direccion, suave y sin depender de los fps
+    fn steer_toward(&mut self, direction: Vec3, response: f32, dt: f32) {
+        let d = direction.normalized();
+        let k = 1.0 - (-response * dt).exp();
+        // la vuelta mas corta: si la diferencia da mas de media vuelta mejor gira pal otro lado
+        let pi = std::f32::consts::PI;
+        let yaw_difference = ((-d.x).atan2(-d.z) - self.yaw + pi).rem_euclid(2.0 * pi) - pi;
+        self.yaw += yaw_difference * k;
+        let wanted_pitch = d.y.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        self.pitch += (wanted_pitch - self.pitch) * k;
+    }
+
+    // un cuadro de viaje
+    fn warp_step(&mut self, dt: f32, scene: &Scene, t: f32) {
+        let Some(mut trip) = self.warp_trip.take() else { return };
+        trip.elapsed += dt;
+        let radius = scene.bodies[trip.target].radius;
+        let center = scene.body_position(trip.target, t);
+        let distance = (center - self.position).length();
+        let aim = self.warp_aim(trip.target, scene, t);
+        let to_aim = aim - self.position;
+        let mut finished = trip.elapsed > WARP_MAX_TIME;
+
+        match trip.phase {
+            WarpPhase::Align => {
+                // se va frenando lo q traia mientras gira hacia el destino
+                self.steer_toward(to_aim, WARP_ALIGN_RESPONSE, dt);
+                self.velocity = self.velocity * (-3.0 * dt).exp();
+                if trip.elapsed >= WARP_ALIGN_TIME {
+                    trip.speed = self.velocity.dot(self.forward()).max(0.0);
+                    trip.phase = WarpPhase::Accelerate;
+                }
+            }
+            WarpPhase::Accelerate | WarpPhase::Cruise => {
+                self.steer_toward(to_aim, WARP_STEER_RESPONSE, dt);
+                trip.speed = (trip.speed + WARP_ACCEL * dt).min(WARP_SPEED);
+                if trip.speed >= WARP_SPEED {
+                    trip.phase = WarpPhase::Cruise;
+                }
+                if distance < WARP_BRAKE_RADII * radius {
+                    trip.phase = WarpPhase::Brake;
+                }
+                self.velocity = self.forward() * trip.speed;
+            }
+            WarpPhase::Brake => {
+                self.steer_toward(to_aim, WARP_STEER_RESPONSE, dt);
+                // entre menos falta para llegar mas lento va, asi frena suave y nunca se pasa
+                // si venia lento porque el viaje era corto, puede acelerar hasta esa velocidad
+                let left = distance - WARP_ARRIVE_RADII * radius;
+                let per_second = WARP_SPEED / ((WARP_BRAKE_RADII - WARP_ARRIVE_RADII) * radius);
+                trip.speed = (trip.speed + WARP_ACCEL * dt).min(left * per_second).max(0.0);
+                // la velocidad del planeta se suma, asi vamos llegando a su mismo paso
+                let planet_velocity = body_velocity(scene, trip.target, t);
+                self.velocity = self.forward() * trip.speed + planet_velocity;
+                if left < 0.5 {
+                    self.velocity = planet_velocity;
+                    finished = true;
+                }
+            }
+        }
+        self.position += self.velocity * dt;
+
+        // la ruta ya esquiva todo, pero si un cuerpo igual nos queda encima cortamos el viaje
+        let mut hit = false;
+        if trip.phase != WarpPhase::Align {
+            for (j, b) in scene.bodies.iter().enumerate() {
+                let to_body = scene.body_position(j, t) - self.position;
+                if to_body.length() < collision_radius(b.radius) && self.velocity.dot(to_body) > 0.0 {
+                    hit = true;
+                }
+            }
+        }
+
+        let flame = matches!(trip.phase, WarpPhase::Accelerate | WarpPhase::Cruise);
+        self.update_visuals(flame, dt);
+        if hit {
+            self.cancel_warp();
+        } else if !finished {
+            self.warp_trip = Some(trip);
+        }
+    }
+
     // ladeo y turbo, se usan igual en vuelo normal y en orbita
     fn update_visuals(&mut self, boost: bool, dt: f32) {
         // la nave se ladea segun lo q de verdad esta girando, no segun la tecla
@@ -343,7 +545,10 @@ impl Ship {
         if input.gravity_toggle {
             self.gravity_on = !self.gravity_on;
         }
-        if self.orbit.is_some() {
+        if self.warp_trip.is_some() {
+            // en un viaje la nave va sola, las teclas de vuelo no hacen nada
+            self.warp_step(dt, scene, t);
+        } else if self.orbit.is_some() {
             // en orbita la altura ya la controlamos nosotros, por eso aqui no hay gravedad
             self.orbit_step(input, dt, scene, t);
         } else {
@@ -353,6 +558,14 @@ impl Ship {
             self.fly(input, dt);
         }
         self.collide(scene, t);
+
+        // el efecto visual solo va prendido mientras la nave va acelerando o en crucero
+        let at_speed = matches!(self.warp_trip.as_ref().map(|trip| trip.phase), Some(WarpPhase::Accelerate | WarpPhase::Cruise));
+        let effect_target = if at_speed { 1.0 } else { 0.0 };
+        self.warp_effect += (effect_target - self.warp_effect) * (1.0 - (-WARP_EFFECT_RESPONSE * dt).exp());
+        if self.warp_effect < 0.001 && !at_speed {
+            self.warp_effect = 0.0;
+        }
 
         // el blend camina hacia 1 en orbita y hacia 0 en vuelo, y al llegar se queda exacto
         let target = if self.orbit.is_some() { 1.0 } else { 0.0 };
@@ -904,6 +1117,137 @@ mod tests {
         assert_eq!((forward - f).length(), 0.0);
         assert_eq!((r - f.cross(Vec3::UP).normalized()).length(), 0.0);
         assert!(is_finite(u));
+    }
+
+    #[test]
+    fn se_puede_viajar_entre_todos_los_mundos_sin_chocar() {
+        let scene = Scene::new();
+        let mut worst_margin = f32::MAX;
+        let mut slowest = 0.0f32;
+        let mut trips = 0;
+
+        // de cada mundo a cada otro, en varios momentos de sus orbitas y con buenos y malos fps
+        for from in 1..=5 {
+            for to in 1..=5 {
+                if from == to {
+                    continue;
+                }
+                for start in [0.0, 40.0, 200.0, 777.0] {
+                    for dt in [1.0 / 60.0, 1.0 / 20.0] {
+                        let mut ship = Ship::new(scene.body_position(from, start) + Vec3::new(0.0, scene.bodies[from].radius + 3.0, 0.0));
+                        ship.start_warp(to, &scene, start);
+                        assert!(ship.warping());
+
+                        let mut t = start;
+                        while ship.warping() {
+                            t += dt;
+                            let before = ship.position;
+                            ship.update(ShipInput::default(), dt, &scene, t);
+
+                            // sin teletransporte: nunca avanza mas de lo q da la velocidad
+                            assert!((ship.position - before).length() <= (WARP_SPEED + 10.0) * dt);
+
+                            // y nunca le entra a ningun cuerpo
+                            for (j, b) in scene.bodies.iter().enumerate() {
+                                let margin = (scene.body_position(j, t) - ship.position).length() - collision_radius(b.radius);
+                                worst_margin = worst_margin.min(margin);
+                            }
+                            assert!(t - start < WARP_MAX_TIME, "viaje {from} a {to} no termino");
+                        }
+                        slowest = slowest.max(t - start);
+                        trips += 1;
+
+                        // llego a su destino, en rango de la f y moviendose con el planeta
+                        let radius = scene.bodies[to].radius;
+                        let arrival = (scene.body_position(to, t) - ship.position).length();
+                        assert!((arrival - WARP_ARRIVE_RADII * radius).abs() < 1.0, "viaje {from} a {to}: quedo a {arrival}");
+                        assert!((ship.velocity - body_velocity(&scene, to, t)).length() < 0.5);
+                    }
+                }
+            }
+        }
+        println!("{trips} viajes, el mas largo tardo {slowest:.1} s, lo mas cerca de una colision fue {worst_margin:.2}");
+        assert!(worst_margin > 0.0);
+    }
+
+    #[test]
+    fn el_sol_en_medio_se_rodea() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        // la nave esta del otro lado del sol, justo en linea con themyscira
+        let target = scene.body_position(1, 0.0);
+        let mut ship = Ship::new(target * -2.0);
+        ship.start_warp(1, &scene, 0.0);
+
+        let mut t = 0.0;
+        let mut closest_to_sun = f32::MAX;
+        while ship.warping() {
+            t += dt;
+            ship.update(ShipInput::default(), dt, &scene, t);
+            closest_to_sun = closest_to_sun.min(ship.position.length());
+        }
+        println!("cruzando el sol: lo mas cerca fue {closest_to_sun:.2} del centro");
+        assert!(closest_to_sun > collision_radius(scene.bodies[0].radius));
+        assert!((scene.body_position(1, t) - ship.position).length() < WARP_BRAKE_RADII * scene.bodies[1].radius);
+    }
+
+    #[test]
+    fn las_fases_van_en_orden_y_el_efecto_prende_a_medio_viaje() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut ship = Ship::new(scene.body_position(5, 0.0) + Vec3::new(0.0, 8.0, 0.0));
+        ship.start_warp(1, &scene, 0.0);
+
+        let mut seen = Vec::new();
+        let mut t = 0.0;
+        let mut strongest = 0.0f32;
+        while ship.warping() {
+            let phase = ship.warp_trip.as_ref().unwrap().phase;
+            if seen.last() != Some(&phase) {
+                seen.push(phase);
+            }
+            // alineandose la nave todavia no prende nada
+            if phase == WarpPhase::Align {
+                assert_eq!(ship.warp_effect(), 0.0);
+            }
+            t += dt;
+            ship.update(ShipInput::default(), dt, &scene, t);
+            strongest = strongest.max(ship.warp_effect());
+        }
+        assert_eq!(seen, vec![WarpPhase::Align, WarpPhase::Accelerate, WarpPhase::Cruise, WarpPhase::Brake]);
+        assert!(strongest > 0.9);
+
+        // al terminar se va apagando solo hasta quedar en 0
+        for _ in 0..300 {
+            t += dt;
+            ship.update(ShipInput::default(), dt, &scene, t);
+        }
+        assert_eq!(ship.warp_effect(), 0.0);
+    }
+
+    #[test]
+    fn un_destino_cercano_no_arranca_el_viaje() {
+        let scene = Scene::new();
+        let mut ship = orbiting_ship(&scene, 1, Vec3::UP, 3.0);
+        ship.start_warp(1, &scene, 0.0);
+        assert!(!ship.warping());
+        // y tampoco le solto la orbita
+        assert_eq!(ship.orbit_body(), Some(1));
+    }
+
+    #[test]
+    fn cancelar_deja_una_velocidad_controlable() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let mut ship = Ship::new(scene.body_position(5, 0.0) + Vec3::new(0.0, 8.0, 0.0));
+        ship.start_warp(1, &scene, 0.0);
+        for step in 1..=150 {
+            ship.update(ShipInput::default(), dt, &scene, step as f32 * dt);
+        }
+        assert!(ship.velocity.length() > WARP_CANCEL_SPEED);
+        ship.cancel_warp();
+        assert!(!ship.warping());
+        assert!(ship.velocity.length() <= WARP_CANCEL_SPEED + 1e-3);
     }
 
     #[test]
