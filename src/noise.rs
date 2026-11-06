@@ -81,3 +81,42 @@ pub fn fbm(p: Vec3, octaves: u32, seed: u32) -> f32 {
     }
     sum
 }
+
+/// Celda entera de la cuadrícula del ruido Voronoi (sirve como "id" de la celda).
+pub type Cell = (i32, i32, i32);
+
+/// RUIDO VORONOI (celular) en 3D.
+/// El espacio se divide en cubos de lado 1 y cada cubo tiene UN punto aleatorio adentro
+/// (su posición sale de `hash01` con la semilla, así que es reproducible).
+/// Para el punto `p` se revisan los 27 cubos vecinos (3×3×3) y se devuelve:
+///   - `f1`: distancia al punto más cercano,
+///   - `f2`: distancia al segundo más cercano,
+///   - la celda del punto más cercano (su "id").
+/// Donde `f2 - f1` es casi 0, `p` está en la frontera entre dos celdas (un borde).
+pub fn voronoi3(p: Vec3, seed: u32) -> (f32, f32, Cell) {
+    let base = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+    let (mut f1, mut f2) = (f32::MAX, f32::MAX);
+    let mut nearest = base;
+    for dz in -1..=1 {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let c = (base.0 + dx, base.1 + dy, base.2 + dz);
+                // Punto aleatorio dentro de la celda c.
+                let point = Vec3::new(
+                    c.0 as f32 + hash01(c.0, c.1, c.2, seed),
+                    c.1 as f32 + hash01(c.0, c.1, c.2, seed.wrapping_add(1)),
+                    c.2 as f32 + hash01(c.0, c.1, c.2, seed.wrapping_add(2)),
+                );
+                let d = (point - p).length();
+                if d < f1 {
+                    f2 = f1;
+                    f1 = d;
+                    nearest = c;
+                } else if d < f2 {
+                    f2 = d;
+                }
+            }
+        }
+    }
+    (f1, f2, nearest)
+}

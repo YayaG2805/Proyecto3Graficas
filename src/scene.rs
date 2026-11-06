@@ -3,9 +3,10 @@
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
+use crate::noise::fbm;
 use crate::normal_map::NormalMap;
 use crate::renderer::{FragmentShader, Renderer};
-use crate::shaders::{themyscira_elevation, OrbitShader, SunShader, ThemysciraShader};
+use crate::shaders::{themyscira_elevation, KryptonShader, OrbitShader, SunShader, ThemysciraShader};
 use std::sync::Arc;
 
 /// Cuántos segmentos de línea forman cada órbita (más = círculo más redondo).
@@ -16,6 +17,23 @@ const ORBIT_SEGMENTS: usize = 128;
 const THEMYSCIRA_SEED: u32 = 7;
 /// Qué tanto suben las islas sobre el mar, en fracción del radio (0.06 = 6%).
 const THEMYSCIRA_RELIEF: f32 = 0.06;
+
+// --- Krypton (tamaño de cristales, venas y colores están en shaders.rs) ---
+/// Semilla de las crestas y de los cristales.
+const KRYPTON_SEED: u32 = 21;
+/// Altura de las crestas de cristal, en fracción del radio (0.08 = 8%).
+const KRYPTON_RELIEF: f32 = 0.08;
+/// Frecuencia de las cordilleras (más alto = más crestas y más juntas).
+const KRYPTON_RIDGE_FREQ: f32 = 2.5;
+/// Qué tan afiladas son las crestas (exponente: más alto = más finas y puntiagudas).
+const KRYPTON_RIDGE_SHARPNESS: f32 = 3.0;
+
+/// Ruido RIDGED para Krypton: 1 - |fbm| vale 1 justo donde el ruido cruza por 0, así que
+/// se forman "líneas" de crestas afiladas en vez de colinas redondas.
+fn krypton_ridge(dir: Vec3) -> f32 {
+    let ridge = (1.0 - fbm(dir * KRYPTON_RIDGE_FREQ, 4, KRYPTON_SEED).abs() * 2.0).max(0.0);
+    ridge.powf(KRYPTON_RIDGE_SHARPNESS)
+}
 
 pub struct Body {
     pub name: &'static str,
@@ -122,9 +140,27 @@ impl Scene {
             }),
         };
 
+        // KRYPTON (Superman): cristales azules con venas rojas brillantes.
+        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
+        //   gravity: 90.0,
+        //   info: title "Krypton", hero "Superman",
+        //         fact "Su sol rojo no le daba poderes a Kal-El; el sol amarillo de la Tierra sí."
+        // Deformación RIDGED: radio = 1 + relieve × (1 - |fbm|)^afilado → cordilleras de cristal.
+        let krypton = Body {
+            name: "Krypton",
+            radius: 5.0,
+            orbit_radius: 70.0,
+            orbit_speed: 0.05,
+            orbit_phase: 2.4, // distinta a Themyscira para que no queden alineados
+            spin_speed: 0.18,
+            tilt: 0.15,
+            lods: sphere_lods(&|d| 1.0 + krypton_ridge(d) * KRYPTON_RELIEF),
+            shader: Arc::new(KryptonShader { seed: KRYPTON_SEED }),
+        };
+
         // TODO(planetas): agregar más planetas con identidad propia (ver README).
         Scene {
-            bodies: vec![sun, themyscira],
+            bodies: vec![sun, themyscira, krypton],
             use_lod: true,
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),

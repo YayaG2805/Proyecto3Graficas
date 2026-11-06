@@ -8,7 +8,7 @@
 
 use crate::math::Vec3;
 use crate::mesh::{sphere_dir, sphere_uv};
-use crate::noise::{fbm, hash01};
+use crate::noise::{fbm, hash01, voronoi3};
 use crate::normal_map::NormalMap;
 use crate::renderer::{Fragment, FragmentShader, Uniforms};
 use crate::texture::Texture;
@@ -38,6 +38,24 @@ const THEMYSCIRA_SAND: Vec3 = Vec3::new(0.86, 0.79, 0.60);
 const THEMYSCIRA_GRASS: Vec3 = Vec3::new(0.28, 0.52, 0.20);
 const THEMYSCIRA_GRASS_DARK: Vec3 = Vec3::new(0.16, 0.36, 0.13);
 const THEMYSCIRA_STONE: Vec3 = Vec3::new(0.86, 0.85, 0.80);
+
+// ---------------------------------------------------------------------------
+// KRYPTON: parámetros (el profe puede pedir cambiarlos en vivo).
+// ---------------------------------------------------------------------------
+/// Cuántas celdas Voronoi caben a lo ancho (más alto = cristales más pequeños).
+pub const KRYPTON_CRYSTAL_SCALE: f32 = 7.0;
+/// Cuánto se inclina la normal de cada faceta (0 = esfera lisa, 1 = muy facetado).
+const KRYPTON_FACET_TILT: f32 = 0.55;
+/// Ancho de las venas rojas (en unidades de f2 - f1).
+const KRYPTON_VEIN_WIDTH: f32 = 0.08;
+/// Intensidad del brillo rojo de las venas (> 1 satura hacia blanco en el centro).
+const KRYPTON_VEIN_GLOW: f32 = 1.4;
+/// Brillo especular de los cristales: intensidad y dureza.
+const KRYPTON_SPEC: f32 = 1.2;
+const KRYPTON_SHININESS: f32 = 60.0;
+const KRYPTON_DEEP_BLUE: Vec3 = Vec3::new(0.04, 0.12, 0.42);
+const KRYPTON_CYAN: Vec3 = Vec3::new(0.30, 0.72, 1.00);
+const KRYPTON_VEIN_RED: Vec3 = Vec3::new(1.0, 0.12, 0.06);
 
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
@@ -148,6 +166,55 @@ impl FragmentShader for ThemysciraShader {
             }
         }
         c * lambert(&land, u, 0.06)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KRYPTON (Superman): planeta de cristales azules con venas rojas brillantes.
+//
+// Técnica: ruido VORONOI (celular) sobre local_pos.
+//   - Cada celda es una FACETA de cristal: con el id de la celda se saca un hash que
+//     inclina la normal de toda la celda en su propia dirección (sobre la tangente y la
+//     bitangente del planeta), así cada faceta refleja la luz distinto, como cristal tallado.
+//   - Donde f2 - f1 es pequeño el píxel está en la frontera entre dos celdas: ahí se suma
+//     ROJO EMISIVO (no depende del sol, brilla también del lado de noche).
+//   - Especular Blinn-Phong fuerte + brillo de borde (fresnel) para que parezca cristal.
+// ---------------------------------------------------------------------------
+pub struct KryptonShader {
+    pub seed: u32,
+}
+
+impl FragmentShader for KryptonShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let dir = f.local_pos.normalized();
+        let (f1, f2, cell) = voronoi3(dir * KRYPTON_CRYSTAL_SCALE, self.seed);
+        let rnd = |k: u32| hash01(cell.0, cell.1, cell.2, self.seed.wrapping_add(k));
+
+        // --- Normal de la faceta: la normal del planeta inclinada al azar (fija por celda) ---
+        let n = f.normal;
+        let t = (f.tangent - n * n.dot(f.tangent)).normalized(); // tangente perpendicular a n
+        let b = n.cross(t); // bitangente
+        let tilt = (t * (rnd(10) * 2.0 - 1.0) + b * (rnd(11) * 2.0 - 1.0)) * KRYPTON_FACET_TILT;
+        let facet = if t == Vec3::ZERO { n } else { (n + tilt).normalized() };
+
+        // --- Color del cristal: cada faceta con su propio tono entre azul profundo y cian ---
+        let tone = rnd(12);
+        let mut base = mix(KRYPTON_DEEP_BLUE, KRYPTON_CYAN, tone * tone);
+        base = base * (0.75 + 0.25 * (1.0 - f1).clamp(0.0, 1.0)); // más claro hacia el centro
+
+        // --- Luz: Lambert + especular fuerte + borde de cristal ---
+        let l = (u.light_pos - f.world_pos).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let h = (l + v).normalized();
+        let diff = facet.dot(l).max(0.0);
+        let spec = if diff > 0.0 { facet.dot(h).max(0.0).powf(KRYPTON_SHININESS) * KRYPTON_SPEC } else { 0.0 };
+        let rim = (1.0 - n.dot(v).max(0.0)).powf(3.0) * 0.45;
+        let crystal = base * (0.05 + 0.95 * diff) + Vec3::splat(spec) + KRYPTON_CYAN * rim;
+
+        // --- Venas rojas emisivas en los bordes de las celdas ---
+        let vein = 1.0 - smoothstep(0.0, KRYPTON_VEIN_WIDTH, f2 - f1);
+        let glow = KRYPTON_VEIN_RED * KRYPTON_VEIN_GLOW + Vec3::splat(0.6) * vein.powf(6.0); // centro casi blanco
+        mix(crystal, glow, vein)
     }
 }
 
