@@ -52,6 +52,25 @@ const BATMAN_SIZE: f32 = 0.22;
 const BATMAN_SUIT: Vec3 = Vec3::new(0.22, 0.22, 0.26);
 const BATMAN_CAPE: Vec3 = Vec3::new(0.04, 0.04, 0.05);
 
+// --- Aquaman montado en una ballena espacial (alrededor de Atlantis) ---
+/// Radio de Atlantis (debe coincidir con scene.rs).
+const ATLANTIS_RADIUS: f32 = 6.0;
+/// Radio de la vuelta de la ballena en múltiplos del radio de Atlantis.
+const WHALE_ORBIT_RADII: f32 = 1.35;
+/// Radianes por segundo: nada lento.
+pub const WHALE_SPEED: f32 = 0.25;
+/// Ondulación: cuánto sube y baja y qué tan seguido.
+const WHALE_BOB: f32 = 0.5;
+const WHALE_BOB_FREQ: f32 = 0.8;
+/// Tamaño de la ballena y de Aquaman.
+const WHALE_SIZE: f32 = 1.3;
+const AQUAMAN_SIZE: f32 = 0.22;
+/// Qué tan arriba del centro de la ballena va parado Aquaman (su lomo).
+const WHALE_BACK: f32 = 0.42;
+const WHALE_COLOR: Vec3 = Vec3::new(0.32, 0.42, 0.58);
+const AQUAMAN_ORANGE: Vec3 = Vec3::new(0.95, 0.55, 0.10);
+const AQUAMAN_GREEN: Vec3 = Vec3::new(0.10, 0.55, 0.25);
+
 // --- Estela ---
 /// Cuántas posiciones anteriores forman la estela.
 const TRAIL_POINTS: usize = 20;
@@ -152,6 +171,21 @@ fn placeholder_figure() -> Mesh {
     m
 }
 
+/// Ballena PROVISIONAL: un cuerpo en forma de huevo alargado hacia +Z (la cola) con aletas.
+fn placeholder_whale() -> Mesh {
+    let mut m = Mesh::icosphere(2, &|_| 1.0);
+    for v in &mut m.vertices {
+        // Más ancha adelante (-Z, la cabeza) que atrás.
+        let taper = 1.0 - 0.35 * (v.position.z * 0.5 + 0.5);
+        v.position = Vec3::new(v.position.x * 0.42 * taper, v.position.y * 0.36 * taper, v.position.z);
+    }
+    add_box(&mut m, Vec3::new(0.0, 0.0, 1.05), Vec3::new(0.45, 0.04, 0.12)); // cola
+    add_box(&mut m, Vec3::new(0.0, -0.15, -0.2), Vec3::new(0.55, 0.03, 0.1)); // aletas
+    m.recompute_normals();
+    m.compute_bounds();
+    m
+}
+
 /// Carga un modelo de assets/heroes/<nombre>.obj y, si existen, sus LODs <nombre>_lod1.obj y
 /// <nombre>_lod2.obj (versiones con menos triángulos hechas con Decimate en Blender).
 /// Si el modelo principal no existe todavía, usa `placeholder` para poder probar el movimiento.
@@ -194,6 +228,24 @@ fn flash_path(t: f32) -> Mat4 {
     let pos = Vec3::new(a.cos() * r, 0.0, a.sin() * r);
     // Derivada de (cos a, 0, sen a): hacia donde avanza al crecer el ángulo.
     oriented(pos, pos, Vec3::new(-a.sin(), 0.0, a.cos()))
+}
+
+/// Trayectoria de la ballena en el marco de Atlantis: una vuelta lenta que sube y baja,
+/// con el lomo hacia afuera del planeta y mirando hacia donde nada.
+fn whale_path(t: f32) -> Mat4 {
+    let r = WHALE_ORBIT_RADII * ATLANTIS_RADIUS;
+    let point = |t: f32| {
+        let a = WHALE_SPEED * t;
+        Vec3::new(a.cos() * r, WHALE_BOB * (t * WHALE_BOB_FREQ).sin(), a.sin() * r)
+    };
+    let pos = point(t);
+    oriented(pos, pos, point(t + 0.05) - pos)
+}
+
+/// Aquaman va parado en el lomo de la ballena: SU trayectoria es la de la ballena por una
+/// traslación hacia "arriba" de la ballena (jerarquía: si la ballena se mueve, él también).
+fn aquaman_path(t: f32) -> Mat4 {
+    whale_path(t) * Mat4::translation(Vec3::new(0.0, WHALE_BACK * WHALE_SIZE + AQUAMAN_SIZE * FEET, 0.0))
 }
 
 /// Índice de un cuerpo por su nombre.
@@ -242,6 +294,31 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             path: still,
             place: standing_on(dir, roof, BATMAN_SIZE),
             size: BATMAN_SIZE,
+            trail: None,
+            trail_step: 0.0,
+        });
+    }
+    if let Some(atlantis) = body(scene, "Atlantis") {
+        list.push(Creature {
+            name: "Ballena",
+            home: atlantis,
+            lods: load_hero("ballena", placeholder_whale),
+            shader: Arc::new(HeroShader::solid(WHALE_COLOR)),
+            path: whale_path,
+            place: Mat4::identity(),
+            size: WHALE_SIZE,
+            trail: None,
+            trail_step: 0.0,
+        });
+        list.push(Creature {
+            name: "Aquaman",
+            home: atlantis,
+            lods: load_hero("aquaman", placeholder_figure),
+            // Camisa naranja adelante, verde atrás (la figura provisional no trae colores).
+            shader: Arc::new(HeroShader { main: AQUAMAN_ORANGE, back: AQUAMAN_GREEN, back_z: 0.05 }),
+            path: aquaman_path,
+            place: Mat4::identity(),
+            size: AQUAMAN_SIZE,
             trail: None,
             trail_step: 0.0,
         });
@@ -362,6 +439,23 @@ mod tests {
         }
         // Gira con el planeta: en otro tiempo está en otro lugar del mundo.
         assert!((bat.position(&scene, 0.0) - bat.position(&scene, 5.0)).length() > 0.1);
+    }
+
+    #[test]
+    fn aquaman_va_sobre_la_ballena_alrededor_de_atlantis() {
+        let scene = Scene::new();
+        let list = create_creatures(&scene);
+        let (whale, aqua) = (find(&list, "Ballena"), find(&list, "Aquaman"));
+        assert!((scene.bodies[whale.home].radius - ATLANTIS_RADIUS).abs() < 1e-6, "ATLANTIS_RADIUS no coincide");
+        let ride = WHALE_BACK * WHALE_SIZE + AQUAMAN_SIZE * FEET;
+        for k in 0..30 {
+            let t = k as f32 * 0.9;
+            let center = scene.body_position(whale.home, t);
+            let w = whale.position(&scene, t);
+            assert!(((w - center).length() - WHALE_ORBIT_RADII * ATLANTIS_RADIUS).abs() < WHALE_BOB + 0.05);
+            // Aquaman siempre a la misma distancia de la ballena: va montado en ella.
+            assert!(((aqua.position(&scene, t) - w).length() - ride).abs() < 1e-3);
+        }
     }
 
     #[test]
