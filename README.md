@@ -45,6 +45,7 @@ cargo run --release -- --snapshot   # genera snap_*.ppm e imprime ms/cuadro y tr
 | O | Mostrar/ocultar las órbitas de los planetas |
 | N | Activar/desactivar el mapeo de normales (para comparar) |
 | Tab (mantener) | Probar el efecto visual del warp |
+| G | Activar/desactivar la gravedad de los planetas y el sol |
 | H | Mostrar/ocultar ayuda |
 
 ## Cómo funciona el pipeline (`src/renderer.rs`)
@@ -106,7 +107,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ⬜ | |
-| Atracción gravitatoria | 10 | ⬜ | |
+| Atracción gravitatoria | 10 | ✅ tecla G, se ve en el HUD | `Ship::gravity_accel` |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
 | Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |

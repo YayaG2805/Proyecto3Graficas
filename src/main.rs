@@ -337,11 +337,12 @@ fn main() {
         );
         d.draw_text(
             &format!(
-                "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}",
+                "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}",
                 if game.renderer.frustum_culling { "ON" } else { "OFF" },
                 if game.renderer.use_lod { "ON" } else { "OFF" },
                 if game.scene.show_orbits { "ON" } else { "OFF" },
-                if game.normal_mapping { "ON" } else { "OFF" }
+                if game.normal_mapping { "ON" } else { "OFF" },
+                if game.ship.gravity_on { "ON" } else { "OFF" }
             ),
             10,
             56,
@@ -350,7 +351,7 @@ fn main() {
         );
         if show_help {
             d.draw_text(
-                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   Tab warp   H ocultar ayuda",
+                "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   O orbitas   N normales   G gravedad   Tab warp   H ocultar ayuda",
                 10,
                 WINDOW_H - 28,
                 18,

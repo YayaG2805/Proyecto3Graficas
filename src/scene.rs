@@ -70,8 +70,6 @@ pub struct Body {
     /// None = orbita al sol, Some(i) = es luna del cuerpo i
     pub parent: Option<usize>,
     /// fuerza con la q atrae a la nave (a = gravity / d²)
-    // el allow se quita cuando la gravedad (a4) ya use este numero
-    #[allow(dead_code)]
     pub gravity: f32,
     #[allow(dead_code)]
     pub info: PlanetInfo,

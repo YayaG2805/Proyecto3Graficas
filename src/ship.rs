@@ -49,6 +49,11 @@ const PITCH_LIMIT: f32 = 1.4;
 const ROLL_MAX: f32 = 0.5;
 const ROLL_RESPONSE: f32 = 6.0;
 
+// --- gravedad ---
+// lo maximo q puede jalar la gravedad sumando todos los cuerpos
+// el empuje normal de la nave es 20, mientras esto sea menor siempre se puede escapar
+const MAX_GRAVITY_ACCEL: f32 = 12.0;
+
 pub struct Ship {
     pub position: Vec3,
     pub velocity: Vec3,
@@ -64,6 +69,8 @@ pub struct Ship {
     pub yaw_rate: f32,
     /// a q velocidad esta subiendo o bajando la nariz ahorita (rad/s), positivo = pa arriba
     pub pitch_rate: f32,
+    /// si los cuerpos atraen a la nave o no (tecla G), el hud lo lee pa mostrarlo
+    pub gravity_on: bool,
 }
 
 // calcula la nueva velocidad de giro de un eje, sirve igual pa yaw y pa pitch
@@ -98,7 +105,7 @@ pub struct ShipInput {
 
 impl Ship {
     pub fn new(position: Vec3) -> Ship {
-        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0 }
+        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true }
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -125,8 +132,39 @@ impl Ship {
     }
 
     pub fn update(&mut self, input: ShipInput, dt: f32, scene: &Scene, t: f32) {
+        // la g solo cambia el interruptor, no toca la velocidad q ya traia la nave
+        if input.gravity_toggle {
+            self.gravity_on = !self.gravity_on;
+        }
+        if self.gravity_on {
+            self.velocity += self.gravity_accel(scene, t) * dt;
+        }
         self.fly(input, dt);
         self.collide(scene, t);
+    }
+
+    // cuanto y pa donde jalan todos los cuerpos a la nave en este momento
+    fn gravity_accel(&self, scene: &Scene, t: f32) -> Vec3 {
+        let mut total = Vec3::ZERO;
+        for (i, b) in scene.bodies.iter().enumerate() {
+            // paso 1: la flecha de la nave al cuerpo y q tan lejos esta
+            let to_body = scene.body_position(i, t) - self.position;
+            let d = to_body.length().max(1e-4);
+
+            // paso 2: entre mas lejos, jala mucho menos (a = gravity / d²)
+            // abajo de la superficie ya no sube mas, si no cerca del centro seria infinito
+            let strength = b.gravity / (d * d).max(b.radius * b.radius);
+
+            // paso 3: to_body / d es solo la direccion, de largo 1
+            total += to_body / d * strength;
+        }
+
+        // paso 4: si entre todos se pasan del tope, dejo la misma direccion pero recorto el largo
+        let size = total.length();
+        if size > MAX_GRAVITY_ACCEL {
+            total = total / size * MAX_GRAVITY_ACCEL;
+        }
+        total
     }
 
     // todo el movimiento de la nave en un cuadro, lo separe de la colision pa poder probarlo sin escena
@@ -353,6 +391,81 @@ mod tests {
             ship.fly(ShipInput::default(), dt);
         }
         assert!(ship.yaw_rate.abs() < 0.01);
+    }
+
+    // simula a la nave cayendo y devuelve las distancias al centro del planeta: inicio, final y la menor
+    fn drop_ship(scene: &Scene, i: usize, start_height: f32, seconds: f32) -> (f32, f32, f32) {
+        let dt = 1.0 / 60.0;
+        let up = Vec3::new(0.0, scene.bodies[i].radius + start_height, 0.0);
+        let mut ship = Ship::new(scene.body_position(i, 0.0) + up);
+        let start = (ship.position - scene.body_position(i, 0.0)).length();
+        let mut closest = start;
+        let mut last = start;
+        for step in 0..(seconds / dt).round() as usize {
+            let t = step as f32 * dt;
+            ship.update(ShipInput::default(), dt, scene, t);
+            last = (ship.position - scene.body_position(i, t)).length();
+            closest = closest.min(last);
+        }
+        (start, last, closest)
+    }
+
+    #[test]
+    fn la_nave_quieta_cae_y_la_colision_la_detiene() {
+        let mut scene = Scene::new();
+        // freno la orbita del planeta pa ver solo la gravedad, si no se aleja de la nave
+        scene.bodies[1].orbit_speed = 0.0;
+        let floor = scene.bodies[1].radius * 1.12 + 0.8;
+
+        let (start, after_3s, _) = drop_ship(&scene, 1, 3.0, 3.0);
+        println!("en 3 s: distancia al centro de {start:.2} a {after_3s:.2} (la colision esta en {floor:.2})");
+        assert!(after_3s < start);
+
+        // con mas tiempo llega hasta la colision y nunca la atraviesa
+        let (_, after_20s, closest) = drop_ship(&scene, 1, 3.0, 20.0);
+        println!("en 20 s: distancia {after_20s:.2}, la menor fue {closest:.2}");
+        assert!(closest >= floor - 1e-3);
+        assert!((after_20s - floor).abs() < 0.05);
+    }
+
+    #[test]
+    fn la_g_apaga_la_gravedad() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let center = scene.body_position(1, 0.0);
+        let mut ship = Ship::new(center + Vec3::new(0.0, 10.0, 0.0));
+
+        // el cuadro en q se aprieta ya no jala nada, y sigue apagada aunque ya se solto
+        ship.update(ShipInput { gravity_toggle: true, ..Default::default() }, dt, &scene, 0.0);
+        ship.update(ShipInput::default(), dt, &scene, dt);
+        assert!(!ship.gravity_on);
+        assert_eq!(ship.velocity.length(), 0.0);
+
+        // otra vez la g y vuelve a jalar
+        ship.update(ShipInput { gravity_toggle: true, ..Default::default() }, dt, &scene, dt * 2.0);
+        assert!(ship.gravity_on);
+        assert!(ship.velocity.length() > 0.0);
+    }
+
+    #[test]
+    fn siempre_se_puede_escapar_aunque_la_gravedad_sea_enorme() {
+        let mut scene = Scene::new();
+        scene.bodies[1].orbit_speed = 0.0;
+        scene.bodies[1].gravity = 1_000_000.0;
+        let center = scene.body_position(1, 0.0);
+        let dt = 1.0 / 60.0;
+
+        // la nave mira a -z, asi q la pongo de ese lado pa q acelerar sea alejarse
+        let mut ship = Ship::new(center + Vec3::new(0.0, 0.0, -(scene.bodies[1].radius + 2.0)));
+        assert!(ship.gravity_accel(&scene, 0.0).length() <= MAX_GRAVITY_ACCEL + 1e-3);
+
+        let start = (ship.position - center).length();
+        for step in 0..120 {
+            ship.update(ShipInput { thrust: 1.0, ..Default::default() }, dt, &scene, step as f32 * dt);
+        }
+        let end = (ship.position - center).length();
+        println!("escapando con gravedad enorme: de {start:.2} a {end:.2} en 2 s");
+        assert!(end > start + 2.0);
     }
 
     #[test]
