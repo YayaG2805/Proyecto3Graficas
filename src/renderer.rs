@@ -280,6 +280,16 @@ impl Renderer {
     /// Los puntos ya están en el mundo, así que no hay matriz de modelo: clip = P * V * p.
     /// En `uv.0` cada píxel recibe la distancia recorrida sobre la línea (sirve para puntear).
     pub fn draw_line_loop(&mut self, points: &[Vec3], shader: Arc<dyn FragmentShader>) {
+        self.draw_polyline(points, true, shader);
+    }
+
+    /// Igual que `draw_line_loop` pero ABIERTA: el último punto no se une con el primero
+    /// (sirve para estelas). `uv.0` = distancia desde el primer punto.
+    pub fn draw_line_strip(&mut self, points: &[Vec3], shader: Arc<dyn FragmentShader>) {
+        self.draw_polyline(points, false, shader);
+    }
+
+    fn draw_polyline(&mut self, points: &[Vec3], closed: bool, shader: Arc<dyn FragmentShader>) {
         if points.len() < 2 || self.shaders.len() >= u16::MAX as usize - 1 {
             return;
         }
@@ -298,8 +308,9 @@ impl Renderer {
         };
 
         let mut dist = 0.0; // distancia recorrida sobre la línea
-        for i in 0..points.len() {
-            let (pa, pb) = (points[i], points[(i + 1) % points.len()]); // el último se une con el primero
+        let segments = if closed { points.len() } else { points.len() - 1 };
+        for i in 0..segments {
+            let (pa, pb) = (points[i], points[(i + 1) % points.len()]); // cerrada: el último se une con el primero
             let seg_len = (pb - pa).length();
             let (a, b) = (to_clip(pa, dist), to_clip(pb, dist + seg_len));
             dist += seg_len;

@@ -3,6 +3,7 @@
 //! raylib SOLO se usa para la ventana, leer teclado/mouse, mostrar nuestro framebuffer
 //! como textura 2D y escribir texto del HUD. Todo el 3D lo hace `renderer.rs`.
 
+mod creatures;
 mod exotics;
 mod hud;
 mod interaction;
@@ -17,6 +18,7 @@ mod shaders;
 mod ship;
 mod texture;
 
+use creatures::{create_creatures, Creature};
 use exotics::{AsteroidBelt, Comet, ASTEROID_SEED};
 use hud::{Canvas, RadarBlip};
 use interaction::GameState;
@@ -84,6 +86,8 @@ struct Game {
     asteroids: AsteroidBelt,
     /// Cometa en órbita elíptica (exotics.rs).
     comet: Comet,
+    /// Personajes de la Liga que viven en los mundos (creatures.rs).
+    creatures: Vec<Creature>,
     ship: Ship,
     ship_mesh: Mesh,
     /// true si cargo el halcon, false si estamos con el modelo de respaldo
@@ -141,11 +145,14 @@ impl Game {
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
         let uniforms = Game::make_uniforms(&camera, 0.0, true, 0.0, ship.position);
+        let scene = Scene::new();
+        let creatures = create_creatures(&scene);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
-            scene: Scene::new(),
+            scene,
             asteroids: AsteroidBelt::new(ASTEROID_SEED),
             comet: Comet::new(),
+            creatures,
             ship,
             ship_mesh,
             ship_is_halcon,
@@ -268,6 +275,7 @@ impl Game {
         self.scene.draw(&mut self.renderer, self.time);
         self.asteroids.draw(&mut self.renderer, self.time);
         self.comet.draw_nucleus(&mut self.renderer, self.time);
+        creatures::draw_creatures(&mut self.renderer, &self.scene, self.time, &self.creatures);
         let model = self.ship.model_matrix(1.0);
         // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
         let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
@@ -349,6 +357,17 @@ fn snapshot() {
     // Cometa visto de lado, para que se note que la cola apunta lejos del sol.
     g.time = 0.0;
     g.ship.boost = 0.0;
+    // Superman dando vueltas alrededor de Krypton, con su estela.
+    if let Some(sup) = g.creatures.iter().find(|c| c.name == "Superman") {
+        let hero = sup.position(&g.scene, g.time);
+        let planet = g.scene.body_position(sup.home, g.time);
+        let out = (hero - planet).normalized();
+        aim_ship_at(&mut g, hero + out * 9.0 + Vec3::UP * 3.0, (hero + planet) * 0.5);
+        g.render();
+        g.renderer.save_ppm("snap_superman.ppm").expect("no se pudo guardar");
+        println!("snap_superman.ppm: listo");
+    }
+
     let comet = g.comet.position(g.time);
     let away = comet.normalized();
     let side = away.cross(Vec3::UP).normalized();
