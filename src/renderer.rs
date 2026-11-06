@@ -24,6 +24,9 @@ use crate::mesh::Mesh;
 use rayon::prelude::*;
 use std::sync::Arc;
 
+/// cuando el objeto se ve mas chico q estos tamaños (tamaño / distancia) pasamos al siguiente lod
+const LOD_THRESHOLDS: [f32; 3] = [0.5, 0.15, 0.05];
+
 /// Datos globales del cuadro que reciben todos los shaders.
 #[derive(Clone, Copy, Debug)]
 pub struct Uniforms {
@@ -31,6 +34,10 @@ pub struct Uniforms {
     pub view: Mat4,
     pub projection: Mat4,
     pub camera_pos: Vec3,
+    /// donde va la nave, pa los shaders q reaccionan cuando se acerca
+    // el allow se quita cuando algun shader lo lea (s8)
+    #[allow(dead_code)]
+    pub ship_pos: Vec3,
     /// Base de la cámara (para calcular la dirección de cada píxel del cielo).
     pub camera_right: Vec3,
     pub camera_up: Vec3,
@@ -126,6 +133,8 @@ pub struct Renderer {
     /// Se pueden apagar para comparar (teclas en main).
     pub frustum_culling: bool,
     pub backface_culling: bool,
+    /// si esta en false draw_lods usa siempre el mas detallado, pa comparar los contadores (tecla L)
+    pub use_lod: bool,
 }
 
 impl Renderer {
@@ -141,6 +150,7 @@ impl Renderer {
             stats: Stats::default(),
             frustum_culling: true,
             backface_culling: true,
+            use_lod: true,
         }
     }
 
@@ -171,6 +181,32 @@ impl Renderer {
     /// Devuelve false si se descartó por estar fuera de la vista.
     pub fn draw_mesh(&mut self, mesh: &Mesh, model: &Mat4, shader: Arc<dyn FragmentShader>) -> bool {
         self.draw_mesh_mode(mesh, model, shader, false)
+    }
+
+    /// Elige el LOD según el tamaño aparente y dibuja (con culling). lods[0] = más detallado.
+    /// Devuelve false si se descartó por estar fuera de la vista.
+    pub fn draw_lods(&mut self, lods: &[Mesh], model: &Mat4, shader: Arc<dyn FragmentShader>) -> bool {
+        if lods.is_empty() {
+            return false;
+        }
+        let level = if self.use_lod { self.pick_lod(lods, model) } else { 0 };
+        self.draw_mesh(&lods[level], model, shader)
+    }
+
+    // cual lod usar: entre mas chico se ve el objeto en pantalla, menos triangulos necesita
+    fn pick_lod(&self, lods: &[Mesh], model: &Mat4) -> usize {
+        // paso 1: q tan lejos esta el centro del objeto de la camara
+        let center = model.transform_point(Vec3::ZERO);
+        let dist = (center - self.uniforms.camera_pos).length().max(0.001);
+
+        // paso 2: su tamaño real entre la distancia da mas o menos lo q ocupa en pantalla
+        let apparent = lods[0].bounding_radius * max_scale(model) / dist;
+
+        // paso 3: el primer umbral q supera es su nivel, si no supera ninguno va el ultimo
+        let level = LOD_THRESHOLDS.iter().position(|&limit| apparent > limit).unwrap_or(LOD_THRESHOLDS.len());
+
+        // paso 4: por si el objeto trae menos lods q umbrales
+        level.min(lods.len() - 1)
     }
 
     /// Dibuja una malla ADITIVA (luz: llamas, brillos). Diferencias con `draw_mesh`:

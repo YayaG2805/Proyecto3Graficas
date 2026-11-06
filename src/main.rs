@@ -7,6 +7,7 @@ mod math;
 mod mesh;
 mod noise;
 mod normal_map;
+mod props;
 mod renderer;
 mod scene;
 mod shaders;
@@ -94,7 +95,7 @@ impl Game {
 
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
-        let uniforms = Game::make_uniforms(&camera, 0.0, true, 0.0);
+        let uniforms = Game::make_uniforms(&camera, 0.0, true, 0.0, ship.position);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene: Scene::new(),
@@ -111,7 +112,7 @@ impl Game {
         }
     }
 
-    fn make_uniforms(camera: &ChaseCamera, time: f32, normal_mapping: bool, warp: f32) -> Uniforms {
+    fn make_uniforms(camera: &ChaseCamera, time: f32, normal_mapping: bool, warp: f32, ship_pos: Vec3) -> Uniforms {
         // Con warp el campo de visión se abre: los bordes "se estiran" y parece que vamos más rápido.
         let fov_y = FOV_Y + warp * WARP_FOV_EXTRA;
         let (r, u, f) = camera.basis();
@@ -121,6 +122,7 @@ impl Game {
             view: camera.view(),
             projection: Mat4::perspective(fov_y, aspect, NEAR, FAR),
             camera_pos: camera.position,
+            ship_pos,
             camera_right: r,
             camera_up: u,
             camera_forward: f,
@@ -153,7 +155,7 @@ impl Game {
 
     /// Etapas 1 a 7 (vértices, recorte, rasterizado, z-buffer). El sombreado va aparte.
     fn draw_geometry(&mut self) {
-        let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp);
+        let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp, self.ship.position);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         let model = self.ship.model_matrix(1.0);
@@ -198,7 +200,7 @@ fn snapshot() {
         g.ship.boost = boost;
         g.ship.position = pos;
         // Apuntar la nave hacia el planeta rocoso.
-        let target = g.scene.bodies[1].position(g.time);
+        let target = g.scene.body_position(1, g.time);
         let d = (target - pos).normalized();
         g.ship.yaw = (-d.x).atan2(-d.z);
         g.ship.pitch = d.y.asin();
@@ -262,7 +264,7 @@ fn main() {
             game.renderer.frustum_culling = !game.renderer.frustum_culling;
         }
         if rl.is_key_pressed(KeyboardKey::KEY_L) {
-            game.scene.use_lod = !game.scene.use_lod;
+            game.renderer.use_lod = !game.renderer.use_lod;
         }
         if rl.is_key_pressed(KeyboardKey::KEY_O) {
             game.scene.show_orbits = !game.scene.show_orbits;
@@ -314,7 +316,7 @@ fn main() {
             &format!(
                 "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}",
                 if game.renderer.frustum_culling { "ON" } else { "OFF" },
-                if game.scene.use_lod { "ON" } else { "OFF" },
+                if game.renderer.use_lod { "ON" } else { "OFF" },
                 if game.scene.show_orbits { "ON" } else { "OFF" },
                 if game.normal_mapping { "ON" } else { "OFF" }
             ),

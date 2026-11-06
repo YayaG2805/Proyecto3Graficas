@@ -164,8 +164,8 @@ impl Ship {
 
     fn collide(&mut self, scene: &Scene, t: f32) {
         // Colisión básica: no atravesar planetas ni el sol (empujar hacia afuera).
-        for b in &scene.bodies {
-            let center = b.position(t);
+        for (i, b) in scene.bodies.iter().enumerate() {
+            let center = scene.body_position(i, t);
             let to_ship = self.position - center;
             let min_dist = b.radius * 1.12 + 0.8;
             let d = to_ship.length();

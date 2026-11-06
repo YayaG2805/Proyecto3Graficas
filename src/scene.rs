@@ -5,6 +5,7 @@ use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
 use crate::noise::fbm;
 use crate::normal_map::NormalMap;
+use crate::props::{instance_model, PropInstance, PropKind};
 use crate::renderer::{FragmentShader, Renderer};
 use crate::shaders::{
     gotham_height, themyscira_elevation, AtlantisShader, GothamShader, KryptonShader, OaShader, OrbitShader,
@@ -54,12 +55,32 @@ const OA_SEED: u32 = 57;
 /// Relieve muy leve (fracción del radio): casi todo el efecto es del shader.
 const OA_RELIEF: f32 = 0.015;
 
+/// la ficha de un mundo, lo q se ve en el hud cuando lo escaneas
+// el allow se quita cuando el hud (d3) ya lea estos textos
+#[allow(dead_code)]
+pub struct PlanetInfo {
+    pub title: &'static str,
+    pub hero: &'static str,
+    /// dato curioso pal escaneo
+    pub fact: &'static str,
+}
+
 pub struct Body {
     pub name: &'static str,
+    /// None = orbita al sol, Some(i) = es luna del cuerpo i
+    pub parent: Option<usize>,
+    /// fuerza con la q atrae a la nave (a = gravity / d²)
+    // el allow se quita cuando la gravedad (a4) ya use este numero
+    #[allow(dead_code)]
+    pub gravity: f32,
+    #[allow(dead_code)]
+    pub info: PlanetInfo,
+    /// objetos parados sobre la superficie, los llena sando en s6
+    pub props: Vec<PropInstance>,
     pub radius: f32,
-    /// Distancia al sol (0 = el sol).
+    /// Distancia a lo que orbita: el sol, o su planeta si es luna (0 = el sol).
     pub orbit_radius: f32,
-    /// Radianes por segundo alrededor del sol.
+    /// Radianes por segundo alrededor de lo que orbita.
     pub orbit_speed: f32,
     /// Ángulo inicial en la órbita.
     pub orbit_phase: f32,
@@ -73,8 +94,9 @@ pub struct Body {
 }
 
 impl Body {
-    /// Centro del cuerpo en el tiempo `t` (órbita circular en el plano XZ).
-    pub fn position(&self, t: f32) -> Vec3 {
+    /// donde va en su orbita, medido desde lo q orbita (circulo en el plano xz)
+    /// ojo: pa la posicion real en el mundo hay q usar Scene::body_position
+    fn orbit_offset(&self, t: f32) -> Vec3 {
         self.orbit_point(self.orbit_phase + self.orbit_speed * t)
     }
 
@@ -83,27 +105,11 @@ impl Body {
         Vec3::new(a.cos() * self.orbit_radius, 0.0, a.sin() * self.orbit_radius)
     }
 
-    /// La órbita completa como puntos: la misma fórmula de `position`, dando toda la vuelta.
+    /// La órbita completa como puntos: la misma fórmula de `orbit_offset`, dando toda la vuelta.
     pub fn orbit_points(&self) -> Vec<Vec3> {
         (0..ORBIT_SEGMENTS)
             .map(|i| self.orbit_point(i as f32 / ORBIT_SEGMENTS as f32 * std::f32::consts::TAU))
             .collect()
-    }
-
-    /// Model = Traslación * Inclinación * Rotación propia * Escala
-    pub fn model_matrix(&self, t: f32) -> Mat4 {
-        Mat4::translation(self.position(t))
-            * Mat4::rotation_z(self.tilt)
-            * Mat4::rotation_y(self.spin_speed * t)
-            * Mat4::scale(Vec3::splat(self.radius))
-    }
-
-    /// LOD: según qué tan grande se ve (radio / distancia), elegimos una malla.
-    pub fn pick_lod(&self, camera_pos: Vec3, t: f32) -> usize {
-        let dist = (self.position(t) - camera_pos).length().max(0.001);
-        let apparent = self.radius / dist; // ~ tamaño en pantalla
-        let level = if apparent > 0.5 { 0 } else if apparent > 0.15 { 1 } else if apparent > 0.05 { 2 } else { 3 };
-        level.min(self.lods.len() - 1)
     }
 }
 
@@ -115,8 +121,8 @@ fn sphere_lods(displace: &dyn Fn(Vec3) -> f32) -> Vec<Mesh> {
 
 pub struct Scene {
     pub bodies: Vec<Body>,
-    /// Si es false se usa siempre el LOD 0 (para comparar con el contador de triángulos).
-    pub use_lod: bool,
+    /// los tipos de objeto de superficie, PropInstance.kind es un indice de esta lista
+    pub prop_kinds: Vec<PropKind>,
     /// Dibujar las órbitas (tecla O).
     pub show_orbits: bool,
     pub orbit_shader: Arc<dyn FragmentShader>,
@@ -126,6 +132,14 @@ impl Scene {
     pub fn new() -> Scene {
         let sun = Body {
             name: "Sol",
+            parent: None,
+            gravity: 800.0,
+            info: PlanetInfo {
+                title: "Sol",
+                hero: "Sin héroe",
+                fact: "Es la única fuente de luz del sistema y lo que más atrae a la nave.",
+            },
+            props: Vec::new(),
             radius: 12.0,
             orbit_radius: 0.0,
             orbit_speed: 0.0,
@@ -137,13 +151,18 @@ impl Scene {
         };
 
         // THEMYSCIRA (Mujer Maravilla): islas de piedra clara y pasto sobre un mar Mediterráneo.
-        // TODO(D1): cuando Body tenga `info`, llenarlo con:
-        //   title: "Themyscira", hero: "Mujer Maravilla",
-        //   fact: "Isla oculta de las amazonas; ningún hombre podía pisarla."
         // Deformación con AGUA PLANA: radio = 1 + max(0, elevación) × relieve.
         // Donde la elevación es negativa (mar) el radio queda en 1 exacto → superficie lisa.
         let themyscira = Body {
             name: "Themyscira",
+            parent: None,
+            gravity: 60.0,
+            info: PlanetInfo {
+                title: "Themyscira",
+                hero: "Mujer Maravilla",
+                fact: "Isla oculta de las amazonas; ningún hombre podía pisarla.",
+            },
+            props: Vec::new(),
             radius: 4.0,
             orbit_radius: 45.0,
             orbit_speed: 0.08,
@@ -160,13 +179,17 @@ impl Scene {
         };
 
         // KRYPTON (Superman): cristales azules con venas rojas brillantes.
-        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
-        //   gravity: 90.0,
-        //   info: title "Krypton", hero "Superman",
-        //         fact "Su sol rojo no le daba poderes a Kal-El; el sol amarillo de la Tierra sí."
         // Deformación RIDGED: radio = 1 + relieve × (1 - |fbm|)^afilado → cordilleras de cristal.
         let krypton = Body {
             name: "Krypton",
+            parent: None,
+            gravity: 90.0,
+            info: PlanetInfo {
+                title: "Krypton",
+                hero: "Superman",
+                fact: "Su sol rojo no le daba poderes a Kal-El; el sol amarillo de la Tierra sí.",
+            },
+            props: Vec::new(),
             radius: 5.0,
             orbit_radius: 70.0,
             orbit_speed: 0.05,
@@ -178,13 +201,17 @@ impl Scene {
         };
 
         // GOTHAM (Batman): planeta-ciudad oscuro, casi siempre de noche.
-        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
-        //   gravity: 100.0,
-        //   info: title "Gotham", hero "Batman",
-        //         fact "Bruce Wayne patrulla de noche; de día es el dueño de Industrias Wayne."
         // Deformación EN ESCALÓN: cada manzana sube a su propia altura, como edificios.
         let gotham = Body {
             name: "Gotham",
+            parent: None,
+            gravity: 100.0,
+            info: PlanetInfo {
+                title: "Gotham",
+                hero: "Batman",
+                fact: "Bruce Wayne patrulla de noche; de día es el dueño de Industrias Wayne.",
+            },
+            props: Vec::new(),
             radius: 5.5,
             orbit_radius: 100.0,
             orbit_speed: 0.035,
@@ -196,13 +223,17 @@ impl Scene {
         };
 
         // ATLANTIS (Aquaman): océano con olas en movimiento y arrecifes.
-        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
-        //   gravity: 110.0,
-        //   info: title "Atlantis", hero "Aquaman",
-        //         fact "Arthur Curry puede hablar con la vida marina y es rey de los siete mares."
         // SIN deformación: la superficie del mar es lisa; las olas están en el shader (en la normal).
         let atlantis = Body {
             name: "Atlantis",
+            parent: None,
+            gravity: 110.0,
+            info: PlanetInfo {
+                title: "Atlantis",
+                hero: "Aquaman",
+                fact: "Arthur Curry puede hablar con la vida marina y es rey de los siete mares.",
+            },
+            props: Vec::new(),
             radius: 6.0,
             orbit_radius: 130.0,
             orbit_speed: 0.028,
@@ -214,13 +245,17 @@ impl Scene {
         };
 
         // OA (Linterna Verde): planeta verde que pulsa con energía.
-        // TODO(D1): cuando Body tenga estos campos, llenarlos con:
-        //   gravity: 70.0,
-        //   info: title "Oa", hero "Linterna Verde",
-        //         fact "Es el centro del universo y la base de los Guardianes y del Cuerpo de Linternas Verdes."
         // Deformación muy leve con ruido para que no sea una esfera perfecta.
         let oa = Body {
             name: "Oa",
+            parent: None,
+            gravity: 70.0,
+            info: PlanetInfo {
+                title: "Oa",
+                hero: "Linterna Verde",
+                fact: "Es el centro del universo y la base de los Guardianes y del Cuerpo de Linternas Verdes.",
+            },
+            props: Vec::new(),
             radius: 4.5,
             orbit_radius: 160.0,
             orbit_speed: 0.022,
@@ -233,23 +268,88 @@ impl Scene {
 
         Scene {
             bodies: vec![sun, themyscira, krypton, gotham, atlantis, oa],
-            use_lod: true,
+            prop_kinds: Vec::new(),
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),
         }
     }
 
+    /// donde esta de verdad el cuerpo i en el mundo, siempre hay q usar esta
+    pub fn body_position(&self, i: usize, t: f32) -> Vec3 {
+        let b = &self.bodies[i];
+        // si es luna su orbita se suma a donde va su planeta, si no se mide desde el sol (el origen)
+        match b.parent {
+            Some(p) => self.body_position(p, t) + b.orbit_offset(t),
+            None => b.orbit_offset(t),
+        }
+    }
+
+    /// el marco del cuerpo: posicion + inclinacion + giro, pero SIN escala
+    /// sirve pa pegarle cosas encima sin q se estiren con el radio del planeta
+    pub fn body_frame(&self, i: usize, t: f32) -> Mat4 {
+        let b = &self.bodies[i];
+        Mat4::translation(self.body_position(i, t)) * Mat4::rotation_z(b.tilt) * Mat4::rotation_y(b.spin_speed * t)
+    }
+
+    /// la matriz de modelo completa: el marco de arriba * escala(radio)
+    pub fn model_matrix(&self, i: usize, t: f32) -> Mat4 {
+        self.body_frame(i, t) * Mat4::scale(Vec3::splat(self.bodies[i].radius))
+    }
+
     pub fn draw(&self, r: &mut Renderer, t: f32) {
-        let cam = r.uniforms.camera_pos;
-        for b in &self.bodies {
-            let lod = if self.use_lod { b.pick_lod(cam, t) } else { 0 };
-            r.draw_mesh(&b.lods[lod], &b.model_matrix(t), b.shader.clone());
+        for (i, b) in self.bodies.iter().enumerate() {
+            // primero el cuerpo, el renderer elige solito el lod segun q tan grande se ve
+            r.draw_lods(&b.lods, &self.model_matrix(i, t), b.shader.clone());
+
+            // despues lo q tenga parado encima, todos usan el mismo marco del planeta
+            let frame = self.body_frame(i, t);
+            for p in &b.props {
+                let kind = &self.prop_kinds[p.kind];
+                // TODO(Sando): pasar el radio con la deformacion del planeta en esa direccion
+                let model = instance_model(&frame, b.radius, p);
+                r.draw_lods(&kind.lods, &model, kind.shader.clone());
+            }
         }
         if self.show_orbits {
             // El sol no orbita (radio 0), así que no tiene línea.
             for b in self.bodies.iter().filter(|b| b.orbit_radius > 0.0) {
-                r.draw_line_loop(&b.orbit_points(), self.orbit_shader.clone());
+                // las orbitas salen medidas desde el centro, asi q las movemos a donde va el padre
+                // pa los planetas el padre es el sol en el origen y no cambia nada, pero las lunas si
+                let center = b.parent.map_or(Vec3::ZERO, |p| self.body_position(p, t));
+                let points: Vec<Vec3> = b.orbit_points().into_iter().map(|p| p + center).collect();
+                r.draw_line_loop(&points, self.orbit_shader.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn una_luna_se_mueve_junto_con_su_planeta() {
+        let mut scene = Scene::new();
+        let t = 12.0;
+
+        // convierto a krypton (2) en luna de themyscira (1) solo pa esta prueba
+        let alone = scene.body_position(2, t);
+        scene.bodies[2].parent = Some(1);
+
+        // su orbita ahora se tiene q sumar a donde va themyscira, con cualquier t
+        let expected = scene.body_position(1, t) + alone;
+        assert!((scene.body_position(2, t) - expected).length() < 1e-4);
+    }
+
+    #[test]
+    fn el_marco_del_planeta_no_trae_la_escala() {
+        let scene = Scene::new();
+        let frame = scene.body_frame(1, 3.0);
+        let model = scene.model_matrix(1, 3.0);
+
+        // un vector de largo 1 sigue midiendo 1 con el marco, y mide el radio con la matriz completa
+        let up = Vec3::new(0.0, 1.0, 0.0);
+        assert!((frame.transform_dir(up).length() - 1.0).abs() < 1e-4);
+        assert!((model.transform_dir(up).length() - scene.bodies[1].radius).abs() < 1e-4);
     }
 }

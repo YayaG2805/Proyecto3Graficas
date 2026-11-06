@@ -77,7 +77,8 @@ src/
   noise.rs      ruido de gradiente 3D + fBm con semilla + Voronoi 3D (`voronoi3`)
   normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
   texture.rs    textura propia (u, v) con interpolación bilineal
-  scene.rs      sol y planetas: órbitas, rotación, LODs
+  scene.rs      sol y planetas: órbitas, rotación, LODs, posición con jerarquía (lunas)
+  props.rs      objetos sobre la superficie (por ahora solo las estructuras)
   ship.rs       nave (física simple, colisión), shader del Halcón y cámara de persecución
 assets/
   Halcon_Milenario.obj / .mtl / .blend   nave actual: Halcón Milenario low-poly (1680 triángulos)
@@ -100,7 +101,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06`; Krypton: crestas ridged `1 - |fbm|`; Gotham: escalones por manzana | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C | `Renderer::sphere_visible` |
-| LOD según distancia + contador | 8 | ✅ tecla L | `Body::pick_lod` |
+| LOD según distancia + contador | 8 | ✅ tecla L | `Renderer::draw_lods` |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ⬜ | |
