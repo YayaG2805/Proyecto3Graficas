@@ -12,6 +12,7 @@
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, Vertex};
+use crate::noise::fbm;
 use crate::renderer::{Fragment, FragmentShader, Renderer, Uniforms};
 use crate::scene::Scene;
 use std::sync::Arc;
@@ -85,6 +86,11 @@ pub const LANTERN_PULSE_SPEED: f32 = 3.0;
 const LANTERN_AURA: f32 = 2.4;
 const LANTERN_SIZE: f32 = 0.3;
 const LANTERN_GREEN: Vec3 = Vec3::new(0.15, 1.0, 0.35);
+
+// --- Mujer Maravilla (estatua gigante en Themyscira) ---
+/// Tamaño de la estatua: mucho más grande que los demás, es un monumento.
+const WONDER_WOMAN_SIZE: f32 = 0.9;
+const STATUE_STONE: Vec3 = Vec3::new(0.90, 0.88, 0.82);
 
 // --- Estela ---
 /// Cuántas posiciones anteriores forman la estela.
@@ -370,7 +376,35 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             aura: Some((LANTERN_GREEN, Mesh::icosphere(2, &|_| 1.0))),
         });
     }
+    if let Some(themyscira) = body(scene, "Themyscira") {
+        // En la cima más alta de las islas (donde irá el templo de Sando).
+        let (dir, top) = highest_point(scene, themyscira);
+        list.push(Creature {
+            name: "Mujer Maravilla",
+            home: themyscira,
+            lods: load_hero("mujer_maravilla", placeholder_figure),
+            shader: Arc::new(StoneShader),
+            path: still,
+            place: standing_on(dir, top, WONDER_WOMAN_SIZE),
+            size: WONDER_WOMAN_SIZE,
+            trail: None,
+            trail_step: 0.0,
+            aura: None,
+        });
+    }
     list
+}
+
+/// Estatua: piedra blanca con Lambert y vetas suaves de ruido (como mármol).
+struct StoneShader;
+
+impl FragmentShader for StoneShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let veins = 0.9 + 0.1 * fbm(f.local_pos * 6.0, 3, 123);
+        let l = (u.light_pos - f.world_pos).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        STATUE_STONE * veins * (0.15 + 0.85 * diff)
+    }
 }
 
 /// Las auras de luz (aditivas): se dibujan DESPUÉS de todo lo opaco, como el cometa.
@@ -557,6 +591,18 @@ mod tests {
             let d = (gl.position(&scene, t) - scene.body_position(gl.home, t)).length();
             assert!((d - LANTERN_HOVER_RADII * OA_RADIUS).abs() <= LANTERN_BOB + 1e-3);
         }
+    }
+
+    #[test]
+    fn la_estatua_esta_en_la_cima_de_themyscira() {
+        let scene = Scene::new();
+        let list = create_creatures(&scene);
+        let ww = find(&list, "Mujer Maravilla");
+        let (_, top) = highest_point(&scene, ww.home);
+        // La cima está sobre el nivel del mar (radio 4) y la estatua parada encima.
+        assert!(top > scene.bodies[ww.home].radius);
+        let d = (ww.position(&scene, 3.0) - scene.body_position(ww.home, 3.0)).length();
+        assert!((d - (top + WONDER_WOMAN_SIZE * FEET)).abs() < 1e-3);
     }
 
     #[test]
