@@ -383,6 +383,44 @@ fn snapshot() {
         println!("{file}: listo");
     }
 
+    // Un retrato de cada mundo desde su lado iluminado, con la nave en primer plano,
+    // y otro a ras de suelo junto a uno de sus objetos de superficie (árboles, cristales...).
+    for i in 0..g.scene.bodies.len() {
+        let (name, radius) = (g.scene.bodies[i].name, g.scene.bodies[i].radius);
+        if g.scene.bodies[i].orbit_radius == 0.0 {
+            continue; // el sol
+        }
+        let planet = g.scene.body_position(i, g.time);
+        let to_sun = (-planet).normalized();
+        let side = to_sun.cross(Vec3::UP).normalized();
+        let file = name.to_lowercase().replace(' ', "_");
+        aim_ship_at(&mut g, planet + (to_sun * 2.4 + side * 1.0 + Vec3::UP * 0.5) * radius, planet);
+        g.render();
+        g.renderer.save_ppm(&format!("snap_mundo_{file}.ppm")).expect("no se pudo guardar");
+
+        // El objeto de superficie que más mira al sol (para que salga iluminado).
+        let frame = g.scene.body_frame(i, g.time);
+        let b = &g.scene.bodies[i];
+        let best = b.props.iter().max_by(|p, q| {
+            let lit = |d: Vec3| frame.transform_dir(d).dot(to_sun);
+            lit(p.dir).total_cmp(&lit(q.dir))
+        });
+        if let Some(p) = best {
+            let ground = frame.transform_point(p.dir * (radius * (b.surface)(p.dir)));
+            let up = frame.transform_dir(p.dir).normalized();
+            let across = up.cross(Vec3::UP).normalized();
+            // Cámara un poco arriba y a un lado del objeto, mirando hacia él y al horizonte.
+            let eye = ground + up * (SURFACE_SHOT_HEIGHT * radius) + across * (SURFACE_SHOT_DISTANCE * radius);
+            g.ship.position = eye + up * 40.0; // la nave fuera de cuadro
+            g.camera.position = eye;
+            g.camera.target = ground + up * (0.05 * radius);
+            g.camera.up = up;
+            g.render();
+            g.renderer.save_ppm(&format!("snap_suelo_{file}.ppm")).expect("no se pudo guardar");
+        }
+        println!("snap_mundo_{file}.ppm: listo");
+    }
+
     let comet = g.comet.position(g.time);
     let away = comet.normalized();
     let side = away.cross(Vec3::UP).normalized();
@@ -423,6 +461,10 @@ fn snapshot() {
 
 /// Qué tan lejos se pone la cámara en los retratos de los personajes (en múltiplos de su tamaño).
 const PORTRAIT_DISTANCE: f32 = 3.5;
+
+/// Toma a ras de suelo: altura y distancia de la cámara al objeto (en múltiplos del radio del mundo).
+const SURFACE_SHOT_HEIGHT: f32 = 0.12;
+const SURFACE_SHOT_DISTANCE: f32 = 0.35;
 
 /// Posición de la nave para las tomas del cinturón de asteroides.
 const BELT_SHOT: Vec3 = Vec3::new(0.0, 1.5, 88.0);
