@@ -13,6 +13,32 @@ use crate::normal_map::NormalMap;
 use crate::renderer::{Fragment, FragmentShader, Uniforms};
 use crate::texture::Texture;
 
+// ---------------------------------------------------------------------------
+// THEMYSCIRA: parámetros (el profe puede pedir cambiarlos en vivo).
+// La "elevación" es el ruido fBm menos el nivel del mar: < 0 es agua, > 0 es tierra.
+// ---------------------------------------------------------------------------
+/// Frecuencia del ruido del terreno (más alta = islas más pequeñas y numerosas).
+pub const THEMYSCIRA_FREQ: f32 = 3.0;
+/// Nivel del mar en valores de fBm. Más alto = más océano y menos tierra.
+pub const THEMYSCIRA_SEA_LEVEL: f32 = 0.05;
+/// Hasta qué elevación hay playa (arena).
+const THEMYSCIRA_BEACH_TOP: f32 = 0.025;
+/// Desde qué elevación empieza la piedra clara (el pasto queda entre playa y piedra).
+const THEMYSCIRA_STONE_START: f32 = 0.16;
+/// Profundidad a la que el agua ya es azul profundo.
+const THEMYSCIRA_DEEP: f32 = 0.15;
+/// Ancho de la espuma blanca en la orilla (en elevación).
+const THEMYSCIRA_FOAM: f32 = 0.012;
+/// Brillo del sol sobre el mar (Blinn-Phong): intensidad y dureza.
+const THEMYSCIRA_SPEC: f32 = 0.9;
+const THEMYSCIRA_SHININESS: f32 = 90.0;
+const THEMYSCIRA_DEEP_WATER: Vec3 = Vec3::new(0.02, 0.16, 0.42);
+const THEMYSCIRA_SHALLOW_WATER: Vec3 = Vec3::new(0.10, 0.60, 0.72);
+const THEMYSCIRA_SAND: Vec3 = Vec3::new(0.86, 0.79, 0.60);
+const THEMYSCIRA_GRASS: Vec3 = Vec3::new(0.28, 0.52, 0.20);
+const THEMYSCIRA_GRASS_DARK: Vec3 = Vec3::new(0.16, 0.36, 0.13);
+const THEMYSCIRA_STONE: Vec3 = Vec3::new(0.86, 0.85, 0.80);
+
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
     let l = (u.light_pos - frag.world_pos).normalized();
@@ -60,37 +86,68 @@ impl FragmentShader for SunShader {
 }
 
 // ---------------------------------------------------------------------------
-// PLANETA ROCOSO: colores según altura del terreno (ruido) + Lambert.
-// Usa local_pos para que el patrón gire con el planeta.
+// THEMYSCIRA (Mujer Maravilla): islas de piedra clara y pasto en un mar Mediterráneo.
+//
+// Técnica: cada píxel se CLASIFICA por su elevación en un bioma (agua, playa, pasto o
+// piedra) y cada bioma usa su propio modelo de luz:
+//   - agua: Lambert + brillo especular Blinn-Phong del sol (el mar refleja como espejo),
+//   - tierra: Lambert con la normal perturbada por el mapa de normales (relieve de rocas).
+// La elevación es la MISMA función que deforma la malla en scene.rs, así que las costas
+// pintadas coinciden con las islas reales. Usa local_pos para girar con el planeta.
 // ---------------------------------------------------------------------------
-pub struct RockyShader {
+
+/// Elevación del terreno en la dirección `dir` (unitaria, espacio del planeta).
+/// < 0 = bajo el nivel del mar, > 0 = tierra. La usan este shader y la deformación del planeta.
+pub fn themyscira_elevation(dir: Vec3, seed: u32) -> f32 {
+    fbm(dir * THEMYSCIRA_FREQ, 5, seed) - THEMYSCIRA_SEA_LEVEL
+}
+
+pub struct ThemysciraShader {
     pub seed: u32,
-    pub low: Vec3,
-    pub high: Vec3,
-    pub peak: Vec3,
-    /// Mapa de normales opcional (relieve fino: rocas y grietas). None = superficie lisa.
+    /// Relieve fino de las rocas (solo se aplica en tierra).
     pub normal_map: Option<NormalMap>,
     /// Intensidad del mapa de normales (0 = sin efecto, 1 = normal, 2 = exagerado).
     pub normal_strength: f32,
 }
 
-impl FragmentShader for RockyShader {
+impl FragmentShader for ThemysciraShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
-        // Mapeo de normales: cambiamos la normal del píxel ANTES de iluminar.
-        let mut f = *f;
+        let dir = f.local_pos.normalized();
+        let e = themyscira_elevation(dir, self.seed);
+        let l = (u.light_pos - f.world_pos).normalized();
+
+        if e < 0.0 {
+            // --- AGUA: color por profundidad + reflejo del sol ---
+            let depth = -e;
+            let mut water = mix(THEMYSCIRA_SHALLOW_WATER, THEMYSCIRA_DEEP_WATER, smoothstep(0.0, THEMYSCIRA_DEEP, depth));
+            // Espuma: una franja blanca muy delgada pegada a la orilla.
+            let foam = 1.0 - smoothstep(0.0, THEMYSCIRA_FOAM, depth);
+            water = mix(water, Vec3::splat(0.9), foam * 0.6);
+
+            let n = f.normal; // el mar es liso: normal de la esfera, sin mapa de normales
+            let v = (u.camera_pos - f.world_pos).normalized();
+            let h = (l + v).normalized();
+            let diff = n.dot(l).max(0.0);
+            // El brillo solo existe del lado iluminado (diff > 0).
+            let spec = if diff > 0.0 { n.dot(h).max(0.0).powf(THEMYSCIRA_SHININESS) * THEMYSCIRA_SPEC } else { 0.0 };
+            return water * (0.05 + 0.95 * diff) + Vec3::new(1.0, 0.95, 0.85) * spec;
+        }
+
+        // --- TIERRA: playa → pasto → piedra, con transiciones suaves ---
+        let detail = fbm(dir * 30.0, 2, self.seed + 99) * 0.5 + 0.5; // manchas finas para verse de cerca
+        let grass = mix(THEMYSCIRA_GRASS_DARK, THEMYSCIRA_GRASS, detail);
+        let mut c = mix(THEMYSCIRA_SAND, grass, smoothstep(THEMYSCIRA_BEACH_TOP * 0.6, THEMYSCIRA_BEACH_TOP * 1.4, e));
+        c = mix(c, THEMYSCIRA_STONE, smoothstep(THEMYSCIRA_STONE_START - 0.03, THEMYSCIRA_STONE_START + 0.03, e + (detail - 0.5) * 0.04));
+
+        // Mapa de normales SOLO en tierra; entra poco a poco desde la orilla para no cortar.
+        let mut land = *f;
         if u.normal_mapping {
             if let Some(map) = &self.normal_map {
-                f.normal = map.apply(&f, self.normal_strength);
+                let strength = self.normal_strength * smoothstep(0.0, THEMYSCIRA_BEACH_TOP, e);
+                land.normal = map.apply(f, strength);
             }
         }
-        let f = &f;
-
-        let dir = f.local_pos.normalized();
-        let h = fbm(dir * 3.0, 5, self.seed) * 0.5 + 0.5;
-        let detail = fbm(dir * 25.0, 2, self.seed + 99) * 0.08; // textura fina para verse de cerca
-        let mut c = mix(self.low, self.high, smoothstep(0.35, 0.6, h + detail));
-        c = mix(c, self.peak, smoothstep(0.62, 0.75, h));
-        c * lambert(f, u, 0.06)
+        c * lambert(&land, u, 0.06)
     }
 }
 

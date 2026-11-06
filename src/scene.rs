@@ -3,14 +3,19 @@
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::Mesh;
-use crate::noise::fbm;
 use crate::normal_map::NormalMap;
 use crate::renderer::{FragmentShader, Renderer};
-use crate::shaders::{OrbitShader, RockyShader, SunShader};
+use crate::shaders::{themyscira_elevation, OrbitShader, SunShader, ThemysciraShader};
 use std::sync::Arc;
 
 /// Cuántos segmentos de línea forman cada órbita (más = círculo más redondo).
 const ORBIT_SEGMENTS: usize = 128;
+
+// --- Themyscira (los umbrales de color y el nivel del mar están en shaders.rs) ---
+/// Semilla del terreno: cambiarla mueve las islas.
+const THEMYSCIRA_SEED: u32 = 7;
+/// Qué tanto suben las islas sobre el mar, en fracción del radio (0.06 = 6%).
+const THEMYSCIRA_RELIEF: f32 = 0.06;
 
 pub struct Body {
     pub name: &'static str,
@@ -94,31 +99,32 @@ impl Scene {
             shader: Arc::new(SunShader { seed: 1, speed: 0.15 }),
         };
 
-        // Planeta rocoso con la superficie DEFORMADA por ruido (montañas).
-        let rocky_seed = 7;
-        let rocky = Body {
-            name: "Roca",
+        // THEMYSCIRA (Mujer Maravilla): islas de piedra clara y pasto sobre un mar Mediterráneo.
+        // TODO(D1): cuando Body tenga `info`, llenarlo con:
+        //   title: "Themyscira", hero: "Mujer Maravilla",
+        //   fact: "Isla oculta de las amazonas; ningún hombre podía pisarla."
+        // Deformación con AGUA PLANA: radio = 1 + max(0, elevación) × relieve.
+        // Donde la elevación es negativa (mar) el radio queda en 1 exacto → superficie lisa.
+        let themyscira = Body {
+            name: "Themyscira",
             radius: 4.0,
             orbit_radius: 45.0,
             orbit_speed: 0.08,
             orbit_phase: 0.0,
             spin_speed: 0.25,
             tilt: 0.3,
-            lods: sphere_lods(&move |d| 1.0 + 0.06 * fbm(d * 3.0, 5, rocky_seed).max(-0.1)),
-            shader: Arc::new(RockyShader {
-                seed: rocky_seed,
-                low: Vec3::new(0.35, 0.22, 0.15),
-                high: Vec3::new(0.55, 0.45, 0.35),
-                peak: Vec3::new(0.9, 0.9, 0.92),
+            lods: sphere_lods(&|d| 1.0 + themyscira_elevation(d, THEMYSCIRA_SEED).max(0.0) * THEMYSCIRA_RELIEF),
+            shader: Arc::new(ThemysciraShader {
+                seed: THEMYSCIRA_SEED,
                 // Mapa de normales 512x256: frecuencia 10 (tamaño de las rocas), relieve 3% del radio.
-                normal_map: Some(NormalMap::generate(512, 256, rocky_seed + 100, 10.0, 0.03)),
+                normal_map: Some(NormalMap::generate(512, 256, THEMYSCIRA_SEED + 100, 10.0, 0.03)),
                 normal_strength: 1.0,
             }),
         };
 
         // TODO(planetas): agregar más planetas con identidad propia (ver README).
         Scene {
-            bodies: vec![sun, rocky],
+            bodies: vec![sun, themyscira],
             use_lod: true,
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),

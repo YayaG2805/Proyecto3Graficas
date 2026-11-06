@@ -73,7 +73,7 @@ src/
   math.rs       Vec3, Vec4, Mat4 (traslación, rotación, escala, look_at, perspectiva)
   mesh.rs       Vertex/Mesh, carga de .obj (tobj), icosfera con subdivisión, normales
   renderer.rs   pipeline por software (ver arriba) + contadores
-  shaders.rs    shaders: sol (animado), planeta rocoso, nave (Blinn-Phong), llama del turbo (aditiva), cielo de estrellas
+  shaders.rs    shaders: sol (animado), Themyscira (biomas: agua especular / tierra con normales), nave (Blinn-Phong), llama del turbo (aditiva), cielo de estrellas
   noise.rs      ruido de gradiente 3D + fBm con semilla
   normal_map.rs mapa de normales procedural (espacio tangente) + base TBN
   texture.rs    textura propia (u, v) con interpolación bilineal
@@ -93,10 +93,10 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Requisito: pipeline propio, modelo/vista/proyección, z-buffer | – | ✅ | `renderer.rs`, `math.rs` |
 | Requisito: sol + nave propia + planeta que orbita y rota (con `dt`) | – | ✅ | `scene.rs`, `ship.rs` |
 | Requisito: fragment shader propio | – | ✅ | `shaders.rs` |
-| Planetas distinguibles (10 c/u, máx 5) | 50 | 🟡 1 de 5 | `scene.rs` |
+| Planetas distinguibles (10 c/u, máx 5) | 50 | 🟡 1 de 5: Themyscira | `scene.rs` |
 | Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, roca, nave, llama del turbo, órbita, cielo | `shaders.rs` |
 | Shader animado | 8 | ✅ sol | `SunShader` |
-| Deformación de geometría con ruido | 10 | ✅ planeta rocoso | `scene.rs` (`displace`) |
+| Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06` | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C | `Renderer::sphere_visible` |
 | LOD según distancia + contador | 8 | ✅ tecla L | `Body::pick_lod` |
@@ -105,7 +105,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Modo de control local para rodear un planeta | 8 | ⬜ | |
 | Atracción gravitatoria | 10 | ⬜ | |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
-| Mapeo de normales | 8 | ✅ tecla N, planeta rocoso | `normal_map.rs`, `RockyShader` |
+| Mapeo de normales | 8 | ✅ tecla N, solo en la tierra de Themyscira | `normal_map.rs`, `ThemysciraShader` |
 | Órbitas visibles (rúbrica) | – | ✅ tecla O | `Renderer::draw_line_loop`, `OrbitShader` |
 | Warping animado (rúbrica) | – | 🟡 efecto visual listo (Tab); falta el viaje | `warp_streaks` en `shaders.rs`, FOV en `main.rs` |
 
