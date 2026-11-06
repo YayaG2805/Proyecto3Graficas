@@ -101,9 +101,10 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Requisito: sol + nave propia + planeta que orbita y rota (con `dt`) | – | ✅ | `scene.rs`, `ship.rs` |
 | Requisito: fragment shader propio | – | ✅ | `shaders.rs` |
 | Planetas distinguibles (10 c/u, máx 5) | 50 | ✅ 5 de 5: Themyscira, Krypton, Gotham, Atlantis, Oa | `scene.rs` |
+| Luna Central City: jerarquía de transformaciones (rúbrica: lunas) | – | ✅ orbita a Gotham (radio 9) mientras Gotham orbita al sol; rayos animados; se escanea con E | `Scene::body_position`, `CentralCityShader` |
 | Nave modelada por nosotros que sigue a la cámara (rúbrica) | – | ✅ Halcón | `assets/Halcon_Milenario.obj`, `Ship`, `ChaseCamera` |
 | Shaders con efecto distinguible (6 c/u, máx 4) | 24 | ✅ sol, Themyscira, Krypton, Gotham, Atlantis, Oa, nave (paneles y motores), llama del turbo, órbita, cielo | `shaders.rs`, `HalconShader` en `ship.rs` |
-| Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `ExhaustShader` |
+| Shader animado | 8 | ✅ sol (plasma), Gotham (ventanas que parpadean y tráfico), Atlantis (olas), Oa (anillos y respiración), Central City (rayos), llama del turbo | `SunShader`, `GothamShader`, `AtlantisShader`, `OaShader`, `CentralCityShader`, `ExhaustShader` |
 | Deformación de geometría con ruido | 10 | ✅ Themyscira: islas con agua plana `1 + max(0, elev)·0.06`; Krypton: crestas ridged `1 - |fbm|`; Gotham: escalones por manzana | `scene.rs`, `themyscira_elevation` |
 | Subdivisión procedural de geometría antes de rasterizar | 10 | ✅ icosfera | `Mesh::icosphere` |
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C | `Renderer::sphere_visible` |

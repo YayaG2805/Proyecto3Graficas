@@ -275,25 +275,32 @@ impl Game {
 /// Sirve para probar el renderer sin abrir la ventana.
 fn snapshot() {
     let mut g = Game::new();
-    // (archivo, posición de la nave, mapeo de normales, warp, turbo)
+    // La luna Central City se fotografía en un momento con un rayo cruzándola.
+    let cc_time = 1.1;
+    let cc = g.scene.bodies.iter().position(|b| b.name == "Central City").unwrap_or(1);
+    let cc_pos = g.scene.body_position(cc, cc_time);
+    // (archivo, posición de la nave, cuerpo al que apunta, mapeo de normales, warp, turbo, tiempo)
     let shots = [
-        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), true, 0.0, 0.0),
-        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), true, 0.0, 0.0),
-        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), true, 0.0, 0.0),
+        ("snap_lejos.ppm", Vec3::new(0.0, 25.0, 95.0), 1, true, 0.0, 0.0, 0.0),
+        ("snap_cerca.ppm", Vec3::new(45.0, 4.0, 14.0), 1, true, 0.0, 0.0, 0.0),
+        ("snap_superficie.ppm", Vec3::new(46.5, 4.6, 2.5), 1, true, 0.0, 0.0, 0.0),
         // Misma vista sin mapeo de normales, para comparar.
-        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), false, 0.0, 0.0),
+        ("snap_superficie_sin_normales.ppm", Vec3::new(46.5, 4.6, 2.5), 1, false, 0.0, 0.0, 0.0),
         // Efecto warp al máximo.
-        ("snap_warp.ppm", Vec3::new(0.0, 25.0, 95.0), true, 1.0, 0.0),
+        ("snap_warp.ppm", Vec3::new(0.0, 25.0, 95.0), 1, true, 1.0, 0.0, 0.0),
         // Turbo al máximo: motores blancos + llama.
-        ("snap_turbo.ppm", Vec3::new(0.0, 25.0, 95.0), true, 0.0, 1.0),
+        ("snap_turbo.ppm", Vec3::new(0.0, 25.0, 95.0), 1, true, 0.0, 1.0, 0.0),
+        // Luna Central City con Gotham detrás (jerarquía de transformaciones).
+        ("snap_central_city.ppm", cc_pos + Vec3::new(1.6, 0.6, 2.2), cc, true, 0.0, 0.0, cc_time),
     ];
-    for (name, pos, normal_mapping, warp, boost) in shots {
+    for (name, pos, aim, normal_mapping, warp, boost, time) in shots {
+        g.time = time;
         g.normal_mapping = normal_mapping;
         g.warp = warp;
         g.ship.boost = boost;
         g.ship.position = pos;
-        // Apuntar la nave hacia el planeta rocoso.
-        let target = g.scene.body_position(1, g.time);
+        // Apuntar la nave hacia el cuerpo elegido.
+        let target = g.scene.body_position(aim, g.time);
         let d = (target - pos).normalized();
         g.ship.yaw = (-d.x).atan2(-d.z);
         g.ship.pitch = d.y.asin();

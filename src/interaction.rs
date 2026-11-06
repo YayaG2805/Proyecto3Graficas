@@ -52,9 +52,14 @@ impl GameState {
 }
 
 // busca el cuerpo cuya superficie esta mas cerca de la nave
+// si hay cuerpos dentro del rango de escaneo gana el mas cercano MEDIDO EN RADIOS (como los rangos),
+// asi una luna chiquita (central city) no le gana a su planeta solo por estar a su lado (diego, d4)
 fn find_nearest(ship: &Ship, scene: &Scene, t: f32) -> (Option<usize>, f32) {
     let mut nearest = None;
     let mut nearest_dist = f32::MAX;
+    let mut in_range = None;
+    let mut in_range_dist = f32::MAX;
+    let mut in_range_radii = f32::MAX;
     for (i, b) in scene.bodies.iter().enumerate() {
         // distancia al centro menos el radio = distancia a la superficie
         // sin restar el radio un planeta grande lejos podria perder contra uno chiquito
@@ -63,8 +68,18 @@ fn find_nearest(ship: &Ship, scene: &Scene, t: f32) -> (Option<usize>, f32) {
             nearest = Some(i);
             nearest_dist = dist;
         }
+        let radii = dist / b.radius;
+        if radii < SCAN_RANGE_RADII && radii < in_range_radii {
+            in_range = Some(i);
+            in_range_dist = dist;
+            in_range_radii = radii;
+        }
     }
-    (nearest, nearest_dist)
+    if in_range.is_some() {
+        (in_range, in_range_dist)
+    } else {
+        (nearest, nearest_dist)
+    }
 }
 
 /// si el cuerpo mas cercano esta lo bastante cerca pa enganchar la orbita, el hud lo usa tambien
@@ -151,6 +166,23 @@ mod tests {
         update(&mut state, &mut ship, &scene, &ShipInput::default(), 0.0, 0.016);
         assert_eq!(state.nearest, Some(2));
         assert!((state.nearest_dist - 5.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn la_luna_no_le_gana_a_su_planeta_si_el_planeta_esta_en_rango() {
+        let scene = Scene::new();
+        let mut state = GameState::new();
+        let gotham = scene.bodies.iter().position(|b| b.name == "Gotham").unwrap();
+        let moon = scene.bodies.iter().position(|b| b.name == "Central City").unwrap();
+        // en t = 0 la luna esta 9 unidades en +x de gotham; la nave queda entre los dos:
+        // la superficie de la luna esta mas cerca, pero en radios gotham esta mucho mas cerca
+        let mut ship = Ship::new(scene.body_position(gotham, 0.0) + Vec3::new(9.0, 6.0, 0.0));
+        let to_moon = (scene.body_position(moon, 0.0) - ship.position).length() - scene.bodies[moon].radius;
+        let to_gotham = (scene.body_position(gotham, 0.0) - ship.position).length() - scene.bodies[gotham].radius;
+        assert!(to_moon < to_gotham);
+        update(&mut state, &mut ship, &scene, &ShipInput::default(), 0.0, 0.016);
+        assert_eq!(state.nearest, Some(gotham));
+        assert!((state.nearest_dist - to_gotham).abs() < 1e-3);
     }
 
     #[test]

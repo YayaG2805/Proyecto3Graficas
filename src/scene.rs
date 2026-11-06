@@ -8,8 +8,8 @@ use crate::normal_map::NormalMap;
 use crate::props::{instance_model, PropInstance, PropKind};
 use crate::renderer::{FragmentShader, Renderer};
 use crate::shaders::{
-    gotham_height, themyscira_elevation, AtlantisShader, GothamShader, KryptonShader, OaShader, OrbitShader,
-    SunShader, ThemysciraShader,
+    gotham_height, themyscira_elevation, AtlantisShader, CentralCityShader, GothamShader, KryptonShader, OaShader,
+    OrbitShader, SunShader, ThemysciraShader,
 };
 use std::sync::Arc;
 
@@ -54,6 +54,18 @@ const ATLANTIS_SEED: u32 = 45;
 const OA_SEED: u32 = 57;
 /// Relieve muy leve (fracción del radio): casi todo el efecto es del shader.
 const OA_RELIEF: f32 = 0.015;
+
+// --- Central City, luna de Gotham (rayos y colores están en shaders.rs) — Diego, D4 ---
+/// Radio de la luna.
+const CENTRAL_CITY_RADIUS: f32 = 1.2;
+/// Distancia al centro de Gotham.
+const CENTRAL_CITY_ORBIT: f32 = 9.0;
+/// Radianes por segundo alrededor de Gotham (mucho más rápida que los planetas).
+const CENTRAL_CITY_ORBIT_SPEED: f32 = 0.6;
+/// Semilla de los cráteres y de los rayos.
+const CENTRAL_CITY_SEED: u32 = 69;
+/// Relieve de los cráteres, en fracción del radio.
+const CENTRAL_CITY_RELIEF: f32 = 0.05;
 
 /// la ficha de un mundo, lo q se ve en el hud cuando lo escaneas
 pub struct PlanetInfo {
@@ -261,8 +273,35 @@ impl Scene {
             shader: Arc::new(OaShader { seed: OA_SEED }),
         };
 
+        let mut bodies = vec![sun, themyscira, krypton, gotham, atlantis, oa];
+
+        // CENTRAL CITY (Flash): luna de Gotham. JERARQUÍA DE TRANSFORMACIONES:
+        // su posición = posición de Gotham + su propia órbita de radio 9 alrededor de él,
+        // así que acompaña a Gotham mientras éste orbita al sol (ver body_position).
+        // Va al final de la lista para no cambiar los números 1-5 de los mundos.
+        let gotham_index = bodies.iter().position(|b| b.name == "Gotham").expect("falta Gotham");
+        bodies.push(Body {
+            name: "Central City",
+            parent: Some(gotham_index),
+            gravity: 25.0,
+            info: PlanetInfo {
+                title: "Central City",
+                hero: "Flash",
+                fact: "Barry Allen obtuvo su supervelocidad cuando un rayo cayó sobre los químicos de su laboratorio.",
+            },
+            props: Vec::new(),
+            radius: CENTRAL_CITY_RADIUS,
+            orbit_radius: CENTRAL_CITY_ORBIT,
+            orbit_speed: CENTRAL_CITY_ORBIT_SPEED,
+            orbit_phase: 0.0,
+            spin_speed: 0.4,
+            tilt: 0.0,
+            lods: sphere_lods(&|d| 1.0 + fbm(d * 3.0, 3, CENTRAL_CITY_SEED) * CENTRAL_CITY_RELIEF),
+            shader: Arc::new(CentralCityShader { seed: CENTRAL_CITY_SEED }),
+        });
+
         Scene {
-            bodies: vec![sun, themyscira, krypton, gotham, atlantis, oa],
+            bodies,
             prop_kinds: Vec::new(),
             show_orbits: true,
             orbit_shader: Arc::new(OrbitShader { color: Vec3::new(0.95, 0.55, 0.3), dash_length: 3.0, speed: 3.0 }),

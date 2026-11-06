@@ -162,6 +162,27 @@ const OA_CIRCUIT: Vec3 = Vec3::new(0.12, 0.80, 0.28);
 const OA_RING_GLOW: Vec3 = Vec3::new(0.45, 1.0, 0.45);
 const OA_RIM: Vec3 = Vec3::new(0.25, 1.0, 0.35);
 
+// ---------------------------------------------------------------------------
+// CENTRAL CITY (luna de Gotham, Flash): parámetros de los rayos (Diego, D4).
+// ---------------------------------------------------------------------------
+/// Cuántos rayos independientes puede haber a la vez.
+const CC_BOLTS: i32 = 4;
+/// Cada cuántos segundos vuelve a caer cada rayo (con desfase propio).
+const CC_BOLT_PERIOD: f32 = 3.0;
+/// Qué fracción del periodo dura el rayo encendido (el resto la luna queda tranquila).
+const CC_BOLT_ACTIVE: f32 = 0.3;
+/// Largo del arco que recorre el rayo sobre la luna (radianes; π = media vuelta).
+const CC_BOLT_ARC: f32 = 2.6;
+/// Grosor del núcleo del rayo (en distancia sobre la esfera de radio 1).
+const CC_BOLT_WIDTH: f32 = 0.045;
+/// Qué tanto zigzaguea el rayo y qué tan finos son los quiebres.
+const CC_BOLT_JAG: f32 = 0.07;
+const CC_BOLT_JAG_FREQ: f32 = 9.0;
+const CC_ROCK_DARK: Vec3 = Vec3::new(0.16, 0.15, 0.17);
+const CC_ROCK_LIGHT: Vec3 = Vec3::new(0.38, 0.36, 0.33);
+const CC_BOLT_CORE: Vec3 = Vec3::new(1.0, 0.97, 0.75);
+const CC_BOLT_GLOW: Vec3 = Vec3::new(1.0, 0.78, 0.10);
+
 /// Iluminación difusa (Lambert) desde el sol + luz ambiente.
 pub fn lambert(frag: &Fragment, u: &Uniforms, ambient: f32) -> f32 {
     let l = (u.light_pos - frag.world_pos).normalized();
@@ -634,6 +655,71 @@ impl FragmentShader for OaShader {
         let base = OA_BASE * (0.15 + 0.85 * f.normal.dot(l).max(0.0));
         let circuits = OA_CIRCUIT * (trace * (0.35 + 1.2 * ring)) + OA_RING_GLOW * (node * (0.5 + ring));
         base + circuits * polar + OA_RING_GLOW * (ring * 0.3) + OA_RIM * (rim * 0.9)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CENTRAL CITY: shader ANIMADO de superficie eléctrica (Diego, D4).
+// Roca gris iluminada con Lambert + rayos amarillos EMISIVOS que cruzan la luna.
+// Cada rayo i se repite cada CC_BOLT_PERIOD segundos; en cada repetición ("época")
+// elige al azar un círculo máximo de la esfera y avanza sobre él:
+//   - distancia al plano del círculo = |p · eje|, con zigzag de ruido → qué tan cerca del rayo
+//   - ángulo dentro del plano → qué parte del arco ya recorrió la punta del rayo
+// ---------------------------------------------------------------------------
+pub struct CentralCityShader {
+    pub seed: u32,
+}
+
+/// Dirección al azar (uniforme sobre la esfera) a partir de dos números del hash.
+fn random_dir(a: f32, b: f32) -> Vec3 {
+    let y = a * 2.0 - 1.0;
+    let ang = b * std::f32::consts::TAU;
+    let r = (1.0 - y * y).max(0.0).sqrt();
+    Vec3::new(r * ang.cos(), y, r * ang.sin())
+}
+
+impl CentralCityShader {
+    /// Brillo del rayo `i` en el punto `p` (sobre la esfera de radio 1) en el tiempo `t`.
+    fn bolt(&self, i: i32, p: Vec3, t: f32) -> f32 {
+        // Época y avance: cada rayo tiene su propio desfase para que no caigan juntos.
+        let cycle = t / CC_BOLT_PERIOD + hash01(i, 0, 0, self.seed) * 7.0;
+        let epoch = cycle.floor() as i32;
+        let s = (cycle - cycle.floor()) / CC_BOLT_ACTIVE; // 0..1 mientras está encendido
+        if s >= 1.0 {
+            return 0.0;
+        }
+        // Círculo máximo de esta época: su eje y una base (b, c) dentro de su plano.
+        let h = |k| hash01(i, epoch, k, self.seed);
+        let axis = random_dir(h(1), h(2));
+        let b = axis.cross(random_dir(h(3), h(4))).normalized();
+        let c = axis.cross(b);
+        // La punta avanza de 0 a CC_BOLT_ARC en la primera mitad y luego el rayo se apaga.
+        let angle = p.dot(c).atan2(p.dot(b)).rem_euclid(std::f32::consts::TAU);
+        let head = (s * 2.0).min(1.0) * CC_BOLT_ARC;
+        if angle > head {
+            return 0.0;
+        }
+        // Zigzag: el ruido empuja la distancia al plano, distinto en cada época.
+        let jag = fbm(p * CC_BOLT_JAG_FREQ, 2, self.seed.wrapping_add((epoch * 31 + i) as u32)) * CC_BOLT_JAG;
+        let d = (p.dot(axis) + jag).abs();
+        let core = 1.0 - smoothstep(0.0, CC_BOLT_WIDTH, d);
+        let halo = (-d / (CC_BOLT_WIDTH * 3.0)).exp() * 0.35;
+        // Se desvanece al final y parpadea rápido como electricidad.
+        let fade = 1.0 - smoothstep(0.5, 1.0, s);
+        let flicker = 0.75 + 0.25 * (t * 55.0 + i as f32 * 1.7).sin();
+        (core + halo) * fade * flicker
+    }
+}
+
+impl FragmentShader for CentralCityShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let p = f.local_pos.normalized(); // gira con la luna
+        // Roca: dos tonos mezclados con ruido + Lambert.
+        let n = fbm(p * 5.0, 4, self.seed) * 0.5 + 0.5;
+        let rock = mix(CC_ROCK_DARK, CC_ROCK_LIGHT, smoothstep(0.35, 0.7, n)) * lambert(f, u, 0.08);
+        // Rayos: se SUMAN (emisivos), así brillan también del lado oscuro.
+        let glow: f32 = (0..CC_BOLTS).map(|i| self.bolt(i, p, u.time)).sum();
+        rock + CC_BOLT_GLOW * glow + CC_BOLT_CORE * (glow * glow * 0.5)
     }
 }
 
