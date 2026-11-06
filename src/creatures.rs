@@ -71,8 +71,8 @@ const WHALE_BOB_FREQ: f32 = 0.8;
 const WHALE_SIZE: f32 = 1.3;
 const AQUAMAN_SIZE: f32 = 0.22;
 /// Qué tan arriba del centro de la ballena va parado Aquaman (su lomo), en múltiplos de su
-/// tamaño: el lomo del modelo está a ~0.27 de su radio envolvente.
-const WHALE_BACK: f32 = 0.27;
+/// tamaño: el lomo del modelo está a ~0.21 de su radio envolvente (lo imprime modelar_heroes.py).
+const WHALE_BACK: f32 = 0.21;
 /// Ballena: azul oscuro, vientre claro, negro (ojos), cian (manchas del lomo).
 const WHALE_PALETTE: [Vec3; 4] =
     [Vec3::new(0.20, 0.28, 0.45), Vec3::new(0.70, 0.76, 0.82), BLACK, Vec3::new(0.3, 0.95, 1.0)];
@@ -100,6 +100,8 @@ const LANTERN_PALETTE: [Vec3; 4] = [Vec3::new(0.05, 0.45, 0.15), BLACK, SKIN, Ve
 // --- Mujer Maravilla (estatua gigante en Themyscira) ---
 /// Tamaño de la estatua: mucho más grande que los demás, es un monumento.
 const WONDER_WOMAN_SIZE: f32 = 0.9;
+/// La estatua tiene pedestal: sus pies (la base) están a 0.80 de su radio bajo el centro.
+const WONDER_WOMAN_FEET: f32 = 0.80;
 const STATUE_STONE: Vec3 = Vec3::new(0.90, 0.88, 0.82);
 
 // --- Estela ---
@@ -156,10 +158,11 @@ fn highest_point(scene: &Scene, i: usize) -> (Vec3, f32) {
 }
 
 /// Lugar fijo de una figura PARADA sobre la superficie: pies en `dir · radio`, "arriba" = `dir`.
-fn standing_on(dir: Vec3, radius: f32, size: f32) -> Mat4 {
+/// `feet` = qué tan abajo del centro del modelo están sus pies, en múltiplos de su tamaño.
+fn standing_on(dir: Vec3, radius: f32, size: f32, feet: f32) -> Mat4 {
     // Cualquier dirección perpendicular a "arriba" sirve como "adelante".
     let side = if dir.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
-    oriented(dir * (radius + size * FEET), dir, dir.cross(side))
+    oriented(dir * (radius + size * feet), dir, dir.cross(side))
 }
 
 /// Matriz que pone a alguien mirando hacia `forward` con su "arriba" hacia `up` en `pos`.
@@ -338,7 +341,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             // Colores por parte (paleta): traje gris, capa negra, cinturón amarillo, piel.
             shader: Arc::new(HeroShader { palette: BATMAN_PALETTE.to_vec() }),
             path: still,
-            place: standing_on(dir, roof, BATMAN_SIZE),
+            place: standing_on(dir, roof, BATMAN_SIZE, FEET),
             size: BATMAN_SIZE,
             trail: None,
             trail_step: 0.0,
@@ -395,7 +398,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             lods: load_hero("mujer_maravilla", placeholder_figure),
             shader: Arc::new(StoneShader),
             path: still,
-            place: standing_on(dir, top, WONDER_WOMAN_SIZE),
+            place: standing_on(dir, top, WONDER_WOMAN_SIZE, WONDER_WOMAN_FEET),
             size: WONDER_WOMAN_SIZE,
             trail: None,
             trail_step: 0.0,
@@ -613,7 +616,7 @@ mod tests {
         // La cima está sobre el nivel del mar (radio 4) y la estatua parada encima.
         assert!(top > scene.bodies[ww.home].radius);
         let d = (ww.position(&scene, 3.0) - scene.body_position(ww.home, 3.0)).length();
-        assert!((d - (top + WONDER_WOMAN_SIZE * FEET)).abs() < 1e-3);
+        assert!((d - (top + WONDER_WOMAN_SIZE * WONDER_WOMAN_FEET)).abs() < 1e-3);
     }
 
     #[test]
