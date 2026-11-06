@@ -291,6 +291,7 @@ impl Game {
         // Lo aditivo (la cola y el halo del cometa, la llama del turbo) va SIEMPRE al final,
         // porque necesita el z-buffer completo de lo opaco.
         self.comet.draw_glow(&mut self.renderer, self.time);
+        creatures::draw_creature_glows(&mut self.renderer, &self.scene, self.time, &self.creatures);
 
         // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
         if self.ship.boost > 0.01 {

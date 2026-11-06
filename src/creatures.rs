@@ -71,6 +71,21 @@ const WHALE_COLOR: Vec3 = Vec3::new(0.32, 0.42, 0.58);
 const AQUAMAN_ORANGE: Vec3 = Vec3::new(0.95, 0.55, 0.10);
 const AQUAMAN_GREEN: Vec3 = Vec3::new(0.10, 0.55, 0.25);
 
+// --- Linterna Verde (flota sobre Oa con un brillo que pulsa) ---
+/// Radio de Oa (debe coincidir con scene.rs).
+const OA_RADIUS: f32 = 4.5;
+/// Altura a la que flota, en múltiplos del radio de Oa, y sobre qué punto del planeta.
+const LANTERN_HOVER_RADII: f32 = 1.35;
+const LANTERN_SPOT: Vec3 = Vec3::new(0.3, 0.9, 0.3);
+/// Sube y baja suave al flotar, y qué tan rápido gira sobre sí mismo.
+const LANTERN_BOB: f32 = 0.3;
+const LANTERN_TURN: f32 = 0.4;
+/// Pulsos de luz por segundo (en radianes) y tamaño del aura en múltiplos de su tamaño.
+pub const LANTERN_PULSE_SPEED: f32 = 3.0;
+const LANTERN_AURA: f32 = 2.4;
+const LANTERN_SIZE: f32 = 0.3;
+const LANTERN_GREEN: Vec3 = Vec3::new(0.15, 1.0, 0.35);
+
 // --- Estela ---
 /// Cuántas posiciones anteriores forman la estela.
 const TRAIL_POINTS: usize = 20;
@@ -93,6 +108,8 @@ pub struct Creature {
     /// Color de la estela (None = sin estela) y cada cuántos segundos se toma un punto.
     pub trail: Option<Vec3>,
     pub trail_step: f32,
+    /// Aura de luz alrededor (aditiva) con su color y su esfera, o None.
+    pub aura: Option<(Vec3, Mesh)>,
 }
 
 impl Creature {
@@ -248,6 +265,17 @@ fn aquaman_path(t: f32) -> Mat4 {
     whale_path(t) * Mat4::translation(Vec3::new(0.0, WHALE_BACK * WHALE_SIZE + AQUAMAN_SIZE * FEET, 0.0))
 }
 
+/// Linterna Verde en el marco de Oa: flota sobre LANTERN_SPOT, sube y baja y gira despacio
+/// sobre su propio eje (que apunta hacia afuera del planeta).
+fn lantern_path(t: f32) -> Mat4 {
+    let up = LANTERN_SPOT.normalized();
+    let pos = up * (LANTERN_HOVER_RADII * OA_RADIUS + LANTERN_BOB * (t * 1.5).sin());
+    let side = up.cross(Vec3::new(1.0, 0.0, 0.0)).normalized();
+    let turn = LANTERN_TURN * t;
+    let forward = side * turn.cos() + up.cross(side) * turn.sin();
+    oriented(pos, up, forward)
+}
+
 /// Índice de un cuerpo por su nombre.
 fn body(scene: &Scene, name: &str) -> Option<usize> {
     scene.bodies.iter().position(|b| b.name == name)
@@ -267,6 +295,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             size: SUPERMAN_SIZE,
             trail: Some(SUPERMAN_TRAIL),
             trail_step: 0.06,
+            aura: None,
         });
     }
     if let Some(central_city) = body(scene, "Central City") {
@@ -281,6 +310,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             // Estela larga y amarilla: puntos muy seguidos porque corre muy rápido.
             trail: Some(FLASH_TRAIL),
             trail_step: 0.03,
+            aura: None,
         });
     }
     if let Some(gotham) = body(scene, "Gotham") {
@@ -296,6 +326,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             size: BATMAN_SIZE,
             trail: None,
             trail_step: 0.0,
+            aura: None,
         });
     }
     if let Some(atlantis) = body(scene, "Atlantis") {
@@ -309,6 +340,7 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             size: WHALE_SIZE,
             trail: None,
             trail_step: 0.0,
+            aura: None,
         });
         list.push(Creature {
             name: "Aquaman",
@@ -321,9 +353,64 @@ pub fn create_creatures(scene: &Scene) -> Vec<Creature> {
             size: AQUAMAN_SIZE,
             trail: None,
             trail_step: 0.0,
+            aura: None,
+        });
+    }
+    if let Some(oa) = body(scene, "Oa") {
+        list.push(Creature {
+            name: "Linterna Verde",
+            home: oa,
+            lods: load_hero("linterna_verde", placeholder_figure),
+            shader: Arc::new(LanternShader),
+            path: lantern_path,
+            place: Mat4::identity(),
+            size: LANTERN_SIZE,
+            trail: None,
+            trail_step: 0.0,
+            aura: Some((LANTERN_GREEN, Mesh::icosphere(2, &|_| 1.0))),
         });
     }
     list
+}
+
+/// Las auras de luz (aditivas): se dibujan DESPUÉS de todo lo opaco, como el cometa.
+pub fn draw_creature_glows(r: &mut Renderer, scene: &Scene, t: f32, creatures: &[Creature]) {
+    for c in creatures {
+        if let Some((color, mesh)) = &c.aura {
+            let model = Mat4::translation(c.position(scene, t)) * Mat4::scale(Vec3::splat(c.size * LANTERN_AURA));
+            r.draw_mesh_additive(mesh, &model, Arc::new(AuraShader { color: *color }));
+        }
+    }
+}
+
+/// Brillo que "respira": va de 0.4 a 1 con el tiempo.
+fn pulse(time: f32) -> f32 {
+    0.7 + 0.3 * (time * LANTERN_PULSE_SPEED).sin()
+}
+
+/// Linterna Verde: traje verde oscuro con Lambert + brillo verde EMISIVO que pulsa
+/// (se ve aunque esté del lado oscuro del planeta).
+struct LanternShader;
+
+impl FragmentShader for LanternShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let l = (u.light_pos - f.world_pos).normalized();
+        let diff = f.normal.dot(l).max(0.0);
+        Vec3::new(0.03, 0.18, 0.06) * (0.3 + 0.7 * diff) + LANTERN_GREEN * (0.45 * pulse(u.time))
+    }
+}
+
+/// Aura: brilla en el centro (donde la esfera mira a la cámara) y se desvanece en la orilla.
+struct AuraShader {
+    color: Vec3,
+}
+
+impl FragmentShader for AuraShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let facing = f.normal.dot(v).abs();
+        self.color * (facing.powf(3.0) * 0.45 * pulse(u.time))
+    }
 }
 
 /// Dibuja a todos los personajes (con draw_lods: el culling y el LOD los cuentan) y sus estelas.
@@ -455,6 +542,20 @@ mod tests {
             assert!(((w - center).length() - WHALE_ORBIT_RADII * ATLANTIS_RADIUS).abs() < WHALE_BOB + 0.05);
             // Aquaman siempre a la misma distancia de la ballena: va montado en ella.
             assert!(((aqua.position(&scene, t) - w).length() - ride).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn linterna_verde_flota_sobre_oa_con_su_aura() {
+        let scene = Scene::new();
+        let list = create_creatures(&scene);
+        let gl = find(&list, "Linterna Verde");
+        assert!((scene.bodies[gl.home].radius - OA_RADIUS).abs() < 1e-6, "OA_RADIUS no coincide con scene.rs");
+        assert!(gl.aura.is_some());
+        for k in 0..30 {
+            let t = k as f32 * 0.7;
+            let d = (gl.position(&scene, t) - scene.body_position(gl.home, t)).length();
+            assert!((d - LANTERN_HOVER_RADII * OA_RADIUS).abs() <= LANTERN_BOB + 1e-3);
         }
     }
 

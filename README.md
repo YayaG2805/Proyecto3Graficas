@@ -116,6 +116,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Flash: corre por el ecuador de Central City (una vuelta cada ~2 s) con estela amarilla | – | 🟡 movimiento y estela listos; falta `assets/heroes/flash.obj` | `creatures.rs` (`flash_path`) |
 | Batman: quieto en la azotea más alta de Gotham (el vértice más alto de su malla), gira con el planeta | – | 🟡 posición lista; falta `assets/heroes/batman.obj` y la batiseñal de Sando (S8) | `creatures.rs` (`highest_point`, `standing_on`) |
 | Aquaman montado en una ballena espacial que nada lento alrededor de Atlantis (jerarquía: Aquaman = ballena · traslación) | – | 🟡 movimiento listo; faltan `assets/heroes/ballena.obj` y `aquaman.obj` | `creatures.rs` (`whale_path`, `aquaman_path`) |
+| Linterna Verde: flota sobre Oa con brillo verde emisivo y un aura aditiva que pulsan con el tiempo | – | 🟡 movimiento y brillo listos; falta `assets/heroes/linterna_verde.obj` | `creatures.rs` (`lantern_path`, `LanternShader`, `draw_creature_glows`) |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
 | Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ✅ tecla F, se ve en el HUD | `Ship::orbit_step`, `interaction::update` |
