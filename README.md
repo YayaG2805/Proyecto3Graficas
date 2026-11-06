@@ -102,7 +102,7 @@ Estado: ✅ hecho · 🟡 parcial · ⬜ pendiente
 | Descarte de objetos fuera de la vista + contador | 7 | ✅ tecla C | `Renderer::sphere_visible` |
 | LOD según distancia + contador | 8 | ✅ tecla L | `Body::pick_lod` |
 | Colisión básica con planetas | 4 | ✅ | `Ship::update` |
-| Aceleración/frenado/giro progresivos | 8 | 🟡 aceleración sí, giro aún no | `Ship::update` |
+| Aceleración/frenado/giro progresivos | 8 | ✅ velocidad de giro con inercia, igual a 30 y 144 FPS (`cargo test`) | `Ship::fly`, `next_spin_rate` |
 | Modo de control local para rodear un planeta | 8 | ⬜ | |
 | Atracción gravitatoria | 10 | ⬜ | |
 | Modelos sobre la superficie (5 c/u) + distribución procedural + orientación | 35 | ⬜ | |
