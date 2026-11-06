@@ -489,6 +489,9 @@ def mujer_maravilla():
     m.save()
 
 
-for build in (superman, flash, batman, aquaman, ballena, linterna_verde, mujer_maravilla):
-    build()
-log("LISTO")
+# Solo si se ejecuta este archivo (no cuando otro script, como assets/props/modelar_oa.py,
+# lo importa para reutilizar la clase Model).
+if __name__ == "__main__":
+    for build in (superman, flash, batman, aquaman, ballena, linterna_verde, mujer_maravilla):
+        build()
+    log("LISTO")

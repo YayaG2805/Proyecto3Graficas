@@ -11,6 +11,7 @@ mod math;
 mod mesh;
 mod noise;
 mod normal_map;
+mod oa;
 mod props;
 mod renderer;
 mod scene;
@@ -90,6 +91,8 @@ struct Game {
     comet: Comet,
     /// Personajes de la Liga que viven en los mundos (creatures.rs).
     creatures: Vec<Creature>,
+    /// Batería, torres, anillo, patrulla y auroras de Oa (oa.rs).
+    oa: Option<oa::Oa>,
     ship: Ship,
     ship_mesh: Mesh,
     /// true si cargo el halcon, false si estamos con el modelo de respaldo
@@ -151,12 +154,14 @@ impl Game {
         let scene = Scene::new();
         let state = GameState::new(&scene);
         let creatures = create_creatures(&scene);
+        let oa = oa::Oa::new(&scene);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene,
             asteroids: AsteroidBelt::new(ASTEROID_SEED),
             comet: Comet::new(),
             creatures,
+            oa,
             ship,
             ship_mesh,
             ship_is_halcon,
@@ -281,6 +286,9 @@ impl Game {
         self.asteroids.draw(&mut self.renderer, self.time);
         self.comet.draw_nucleus(&mut self.renderer, self.time);
         creatures::draw_creatures(&mut self.renderer, &self.scene, self.time, &self.creatures);
+        if let Some(oa) = &self.oa {
+            oa.draw(&mut self.renderer, &self.scene, self.time);
+        }
         let model = self.ship.model_matrix(1.0);
         // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
         let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
@@ -294,6 +302,9 @@ impl Game {
         // porque necesita el z-buffer completo de lo opaco.
         self.comet.draw_glow(&mut self.renderer, self.time);
         creatures::draw_creature_glows(&mut self.renderer, &self.scene, self.time, &self.creatures);
+        if let Some(oa) = &self.oa {
+            oa.draw_glow(&mut self.renderer, &self.scene, self.time);
+        }
 
         // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
         if self.ship.boost > 0.01 {
@@ -396,6 +407,26 @@ fn snapshot() {
         g.render();
         g.renderer.save_ppm("snap_batisenal.ppm").expect("no se pudo guardar");
         println!("snap_batisenal.ppm: listo");
+    }
+
+    // Oa: la Batería Central de cerca (con torres y Linterna Verde) y el planeta con su anillo.
+    if let Some((base, up)) = g.oa.as_ref().map(|oa| oa.battery_spot(&g.scene, g.time)) {
+        let across = up.cross(Vec3::UP).normalized();
+        let target = base + up * 1.2;
+        g.camera.position = target + across * 4.5 + up * 0.8;
+        g.camera.target = target;
+        g.camera.up = up;
+        g.ship.position = g.camera.position + up * 40.0;
+        g.render();
+        g.renderer.save_ppm("snap_oa_bateria.ppm").expect("no se pudo guardar");
+        let oa_i = g.scene.bodies.iter().position(|b| b.name == "Oa").unwrap_or(0);
+        let center = g.scene.body_position(oa_i, g.time);
+        let to_sun = (-center).normalized();
+        let oa_radius = g.scene.bodies[oa_i].radius;
+        aim_ship_at(&mut g, center + (to_sun * 5.5 + Vec3::UP * 2.5) * oa_radius, center);
+        g.render();
+        g.renderer.save_ppm("snap_oa_anillo.ppm").expect("no se pudo guardar");
+        println!("snap_oa_*.ppm: listo");
     }
 
     // Un retrato de cada mundo desde su lado iluminado, con la nave en primer plano,

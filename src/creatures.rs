@@ -440,7 +440,7 @@ fn pulse(time: f32) -> f32 {
 
 /// Linterna Verde: colores de su paleta con Lambert + brillo verde EMISIVO que pulsa en las
 /// partes verdes (banda 0), así se ve aunque esté del lado oscuro del planeta.
-struct LanternShader;
+pub(crate) struct LanternShader;
 
 impl FragmentShader for LanternShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
@@ -652,10 +652,10 @@ fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
 }
 
 /// Estela que se desvanece: brillante junto al personaje (uv.0 = 0) y se apaga hacia la cola.
-struct TrailShader {
-    color: Vec3,
+pub(crate) struct TrailShader {
+    pub(crate) color: Vec3,
     /// Largo total de la estela, para saber qué tan lejos de la cabeza está cada píxel.
-    length: f32,
+    pub(crate) length: f32,
 }
 
 impl FragmentShader for TrailShader {
