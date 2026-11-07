@@ -28,12 +28,13 @@ const DOME_COLOR: Vec3 = Vec3::new(0.35, 0.9, 1.0);
 /// Peces: cuántos grupos, peces por grupo, tamaño, distancia (radios de Atlantis) y velocidad.
 const SCHOOLS: usize = 3;
 const FISH_PER_SCHOOL: usize = 10;
-const FISH_SIZE: f32 = 0.2;
+const FISH_SIZE: f32 = 0.28;
 const FISH_RADII: f32 = 1.15;
 const FISH_SPEED: f32 = 0.18;
-const FISH_SPREAD: f32 = 0.9; // qué tan separado va cada pez del centro del grupo
+const FISH_SPREAD: f32 = 0.6; // qué tan separado va cada pez del centro del grupo
 const FISH_SEED: u32 = 4545;
-/// Plateado, aletas naranjas y ojos negros.
+/// Plateado, aletas naranjas y ojos negros. El cuerpo y las aletas brillan un poco (como peces
+/// bioluminiscentes), así se ven también del lado de noche.
 const FISH_PALETTE: [Vec3; 3] = [Vec3::new(0.65, 0.75, 0.85), Vec3::new(1.0, 0.55, 0.15), Vec3::new(0.05, 0.05, 0.06)];
 
 /// Burbujas: cuántas, cada cuánto vuelven a salir, qué tan alto suben y su tamaño.
@@ -87,7 +88,7 @@ impl Atlantis {
         r.draw_lods(&self.city, &self.city_frame(scene, t), Arc::new(city));
 
         let center = scene.body_position(self.home, t);
-        let shader: Arc<PaletteShader> = Arc::new(PaletteShader { palette: FISH_PALETTE.to_vec(), glow: vec![], rim: DOME_COLOR, blink: None });
+        let shader: Arc<PaletteShader> = Arc::new(PaletteShader { palette: FISH_PALETTE.to_vec(), glow: vec![(0, 0.35), (1, 0.4)], rim: DOME_COLOR, blink: None });
         for s in 0..SCHOOLS {
             let head = self.school_point(scene, s, t);
             let ahead = self.school_point(scene, s, t + 0.1) - head;
@@ -123,6 +124,18 @@ impl Atlantis {
         // Remolino: pegado al mar, gira con el planeta.
         let whirl_model = scene.body_frame(self.home, t) * Mat4::scale(Vec3::splat(scene.bodies[self.home].radius));
         r.draw_mesh_additive(&self.whirl, &whirl_model, Arc::new(WhirlShader));
+    }
+
+    /// Centro del remolino y su "arriba" (para las capturas).
+    pub fn whirl_landmark(&self, scene: &Scene, t: f32) -> (Vec3, Vec3) {
+        let m = on_surface(scene, self.home, WHIRL_DIR, 0.0, t);
+        (m.transform_point(Vec3::ZERO), m.transform_dir(Vec3::UP).normalized())
+    }
+
+    /// Centro del primer cardumen y hacia afuera del planeta (para las capturas).
+    pub fn fish_landmark(&self, scene: &Scene, t: f32) -> (Vec3, Vec3) {
+        let p = self.school_point(scene, 0, t);
+        (p, (p - scene.body_position(self.home, t)).normalized())
     }
 
     /// Dónde está la ciudad (para las capturas).
@@ -216,7 +229,7 @@ impl FragmentShader for WhirlShader {
         let arms = smoothstep(0.4, 1.0, spiral);
         let fade = (1.0 - r) * smoothstep(0.0, 0.15, r);
         let l = (u.light_pos - f.world_pos).normalized();
-        let day = 0.25 + 0.75 * f.normal.dot(l).max(0.0);
+        let day = 0.45 + 0.55 * f.normal.dot(l).max(0.0);
         Vec3::new(0.75, 0.95, 1.0) * (arms * fade * day * 0.7)
     }
 }

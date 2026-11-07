@@ -84,6 +84,10 @@ impl Mundos {
         if let Some(w) = &self.atlantis {
             let (p, up) = w.landmark(scene, t);
             list.push(("ciudad_atlantis", p, up, 1.8));
+            let (p, up) = w.whirl_landmark(scene, t);
+            list.push(("remolino", p, up, 1.6));
+            let (p, up) = w.fish_landmark(scene, t);
+            list.push(("peces", p - up * 0.5, up, 1.2));
         }
         if let Some(w) = &self.central_city {
             let (p, up) = w.landmark(scene, t);
