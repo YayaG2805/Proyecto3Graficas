@@ -157,14 +157,13 @@ pub struct Renderer {
     /// Luz que se SUMA encima de la imagen (objetos aditivos, como la llama del turbo).
     glow: Vec<Vec3>,
     shaders: Vec<Arc<dyn FragmentShader>>,
-    /// OPTIMIZACIÓN: los fragmentos ADITIVOS no se sombrean al rasterizar (eso corría en un
-    /// solo núcleo); se guardan aquí (píxel, shader, fragmento) y se sombrean todos juntos en
-    /// paralelo en `finish_frame`. Como la luz se SUMA, el orden no importa.
+    /// Shaders de los objetos ADITIVOS (luz): se sombrean al rasterizar, en paralelo por franjas.
     additive_shaders: Vec<Arc<dyn FragmentShader>>,
-    additive_frags: Vec<(u32, u16, Fragment)>,
     /// Memoria reutilizada de un cuadro a otro (así no se pide memoria nueva en cada dibujo).
-    additive_colors: Vec<Vec3>,
     scratch_verts: Vec<ClipVertex>,
+    /// Triángulos ya en pantalla esperando el rasterizado en paralelo (ver `rasterize_all`).
+    opaque_tris: Vec<ScreenTri>,
+    additive_tris: Vec<ScreenTri>,
     pub uniforms: Uniforms,
     pub stats: Stats,
     /// Se pueden apagar para comparar (teclas en main).
@@ -185,9 +184,9 @@ impl Renderer {
             glow: vec![Vec3::ZERO; width * height],
             shaders: Vec::new(),
             additive_shaders: Vec::new(),
-            additive_frags: Vec::new(),
-            additive_colors: Vec::new(),
             scratch_verts: Vec::new(),
+            opaque_tris: Vec::new(),
+            additive_tris: Vec::new(),
             uniforms,
             stats: Stats::default(),
             frustum_culling: true,
@@ -201,7 +200,8 @@ impl Renderer {
         self.stats = Stats::default();
         self.shaders.clear();
         self.additive_shaders.clear();
-        self.additive_frags.clear();
+        self.opaque_tris.clear();
+        self.additive_tris.clear();
         // OPTIMIZACIÓN: limpiar en paralelo y solo lo necesario: la profundidad y el dueño del
         // píxel (draw = 0 → vacío). Los fragmentos no se borran: solo se leen si alguien
         // escribió encima en este cuadro, y en ese caso ya traen datos nuevos.
@@ -336,6 +336,13 @@ impl Renderer {
             if outside_same_plane(&a.clip, &b.clip, &c.clip) {
                 continue; // todo el triángulo fuera de un mismo borde de la pantalla
             }
+            // OPTIMIZACIÓN: casi ningún triángulo cruza el plano cercano; si los 3 vértices están
+            // delante de él (z + w >= 0) se pasa directo, sin recortar ni pedir memoria.
+            let in_front = |v: &ClipVertex| v.clip.z + v.clip.w >= 0.0;
+            if in_front(&a) && in_front(&b) && in_front(&c) {
+                self.raster_triangle(&a, &b, &c, draw_id, additive);
+                continue;
+            }
             // Recorte contra el plano cercano: z + w >= 0 (si no, se dibuja "detrás" de la cámara).
             let polygon = clip_near(&[a, b, c]);
             for i in 1..polygon.len().saturating_sub(1) {
@@ -438,7 +445,10 @@ impl Renderer {
         }
     }
 
-    /// --- 4 a 7: pantalla, back-face, rasterizado y z-buffer ---
+    /// --- 4 a 6: pantalla, back-face y preparación del triángulo ---
+    /// OPTIMIZACIÓN: el triángulo NO se rasteriza aquí. Se pasa a pantalla, se descarta si da
+    /// la espalda y se guarda en una lista; al final del cuadro `rasterize_all` rasteriza todos
+    /// en paralelo por franjas de pantalla (ver más abajo).
     /// `additive`: el triángulo es aditivo (ver `draw_mesh_additive`) y `draw_id` es su shader
     /// en `additive_shaders`.
     fn raster_triangle(&mut self, a: &ClipVertex, b: &ClipVertex, c: &ClipVertex, draw_id: u16, additive: bool) {
@@ -460,95 +470,98 @@ impl Renderer {
         if area.abs() < 1e-9 || (self.backface_culling && area > 0.0) {
             return;
         }
-        self.stats.triangles_rasterized += 1;
-        let inv_area = 1.0 / area;
 
         // Caja envolvente recortada a la pantalla.
         let min_x = x0.min(x1).min(x2).floor().max(0.0) as usize;
         let max_x = (x0.max(x1).max(x2).ceil() as isize).min(self.width as isize - 1);
         let min_y = y0.min(y1).min(y2).floor().max(0.0) as usize;
         let max_y = (y0.max(y1).max(y2).ceil() as isize).min(self.height as isize - 1);
-        if max_x < 0 || max_y < 0 {
+        if max_x < 0 || max_y < 0 || min_x > max_x as usize || min_y > max_y as usize {
             return;
         }
+        self.stats.triangles_rasterized += 1;
 
         // Atributos divididos por w (para la corrección de perspectiva).
-        let (wa, wb, wc) = (a.world * iw0, b.world * iw1, c.world * iw2);
-        let (na, nb, nc) = (a.normal * iw0, b.normal * iw1, c.normal * iw2);
-        let (la, lb, lc) = (a.local * iw0, b.local * iw1, c.local * iw2);
-        let (ua, ub, uc) = ((a.uv.0 * iw0, a.uv.1 * iw0), (b.uv.0 * iw1, b.uv.1 * iw1), (c.uv.0 * iw2, c.uv.1 * iw2));
-        let (ta, tb, tc) = (a.tangent * iw0, b.tangent * iw1, c.tangent * iw2);
-
-        // OPTIMIZACIÓN: las funciones de arista son LINEALES en x, así que en vez de calcularlas
-        // desde cero en cada píxel (varias multiplicaciones) se calculan al inicio de la fila y
-        // luego solo se les SUMA un paso fijo por píxel.
-        let step0 = (y1 - y2) * inv_area; // cuánto cambia b0 al avanzar un píxel en x
-        let step1 = (y2 - y0) * inv_area; // cuánto cambia b1
-        for py in min_y..=max_y as usize {
-            let fy = py as f32 + 0.5;
-            let row = py * self.width;
-            let fx0 = min_x as f32 + 0.5;
-            // Coordenadas baricéntricas (funciones de arista) en el primer píxel de la fila.
-            let mut b0 = ((x1 - fx0) * (y2 - fy) - (y1 - fy) * (x2 - fx0)) * inv_area;
-            let mut b1 = ((x2 - fx0) * (y0 - fy) - (y2 - fy) * (x0 - fx0)) * inv_area;
-            let mut inside_row = false;
-            for px in min_x..=max_x as usize {
-                let (c0, c1) = (b0, b1);
-                b0 += step0;
-                b1 += step1;
-                let b2 = 1.0 - c0 - c1;
-                if c0 < 0.0 || c1 < 0.0 || b2 < 0.0 {
-                    // El triángulo es convexo: si ya entramos a él en esta fila y salimos, el
-                    // resto de la fila queda afuera → pasar a la siguiente fila.
-                    if inside_row {
-                        break;
-                    }
-                    continue;
-                }
-                inside_row = true;
-                let (b0, b1) = (c0, c1);
-                // 1/w sí es lineal en pantalla → sirve como profundidad.
-                let inv_w = b0 * iw0 + b1 * iw1 + b2 * iw2;
-                let gp = &mut self.gbuffer[row + px];
-                if inv_w <= gp.inv_w {
-                    continue; // prueba de profundidad: ya hay algo más cerca
-                }
-                let wcorr = 1.0 / inv_w;
-                let frag = Fragment {
-                    world_pos: (wa * b0 + wb * b1 + wc * b2) * wcorr,
-                    normal: (na * b0 + nb * b1 + nc * b2) * wcorr, // se normaliza al sombrear
-                    local_pos: (la * b0 + lb * b1 + lc * b2) * wcorr,
-                    uv: ((ua.0 * b0 + ub.0 * b1 + uc.0 * b2) * wcorr, (ua.1 * b0 + ub.1 * b1 + uc.1 * b2) * wcorr),
-                    tangent: (ta * b0 + tb * b1 + tc * b2) * wcorr,
-                };
-                if additive {
-                    // Aditivo: se anota para sombrearlo después (en paralelo); el z-buffer no cambia.
-                    self.additive_frags.push(((row + px) as u32, draw_id, frag));
-                    continue;
-                }
-                gp.inv_w = inv_w;
-                gp.draw = draw_id;
-                self.frags[row + px] = frag;
-            }
+        let tri = ScreenTri {
+            x: [x0, x1, x2],
+            y: [y0, y1, y2],
+            iw: [iw0, iw1, iw2],
+            world: [a.world * iw0, b.world * iw1, c.world * iw2],
+            normal: [a.normal * iw0, b.normal * iw1, c.normal * iw2],
+            local: [a.local * iw0, b.local * iw1, c.local * iw2],
+            uv: [(a.uv.0 * iw0, a.uv.1 * iw0), (b.uv.0 * iw1, b.uv.1 * iw1), (c.uv.0 * iw2, c.uv.1 * iw2)],
+            tangent: [a.tangent * iw0, b.tangent * iw1, c.tangent * iw2],
+            inv_area: 1.0 / area,
+            min_x,
+            max_x: max_x as usize,
+            min_y,
+            max_y: max_y as usize,
+            draw: draw_id,
+        };
+        if additive {
+            self.additive_tris.push(tri);
+        } else {
+            self.opaque_tris.push(tri);
         }
+    }
+
+    /// --- 7. Rasterizado y z-buffer, EN PARALELO ---
+    /// La pantalla se parte en franjas horizontales de BAND_ROWS filas. Cada hilo toma una
+    /// franja y rasteriza ahí todos los triángulos que la tocan, EN EL MISMO ORDEN en que se
+    /// dibujaron (así el resultado es igual que en un solo hilo). Como cada franja escribe solo
+    /// en sus propias filas del z-buffer, los hilos nunca chocan: no hace falta sincronizar.
+    /// Primero van los opacos (llenan el z-buffer) y después los aditivos (solo lo leen).
+    fn rasterize_all(&mut self) {
+        let w = self.width;
+        let bands = self.height.div_ceil(BAND_ROWS);
+        // Repartir: cada triángulo se anota en las franjas que cubre su caja envolvente.
+        let bin = |tris: &[ScreenTri]| {
+            let mut bins: Vec<Vec<u32>> = vec![Vec::new(); bands];
+            for (i, t) in tris.iter().enumerate() {
+                for band in &mut bins[t.min_y / BAND_ROWS..=t.max_y / BAND_ROWS] {
+                    band.push(i as u32);
+                }
+            }
+            bins
+        };
+
+        // Opacos: cada franja con su pedazo del z-buffer y de los fragmentos.
+        let opaque = &self.opaque_tris;
+        let opaque_bins = bin(opaque);
+        self.gbuffer
+            .par_chunks_mut(BAND_ROWS * w)
+            .zip(self.frags.par_chunks_mut(BAND_ROWS * w))
+            .zip(opaque_bins.par_iter())
+            .enumerate()
+            .for_each(|(band, ((gb, fr), list))| {
+                for &i in list {
+                    let t = &opaque[i as usize];
+                    raster_rows(t, band * BAND_ROWS, w, &mut OpaqueTarget { gb: &mut *gb, fr: &mut *fr, draw: t.draw });
+                }
+            });
+
+        // Aditivos (luz): solo LEEN el z-buffer de lo opaco. Cada píxel que pasa la prueba se
+        // sombrea AHÍ MISMO y su luz se suma a `glow`; cada franja suma solo en sus filas, así que
+        // tampoco hay choques entre hilos. (Sumar luz no depende del orden.)
+        let additive = &self.additive_tris;
+        let additive_bins = bin(additive);
+        let (gbuffer, shaders, u) = (&self.gbuffer, &self.additive_shaders, &self.uniforms);
+        self.glow.par_chunks_mut(BAND_ROWS * w).zip(additive_bins.par_iter()).enumerate().for_each(|(band, (glow, list))| {
+            let y0 = band * BAND_ROWS;
+            let gb = &gbuffer[y0 * w..y0 * w + glow.len()];
+            for &i in list {
+                let t = &additive[i as usize];
+                let shader = shaders[t.draw as usize - 1].as_ref();
+                raster_rows(t, y0, w, &mut AdditiveTarget { gb, glow: &mut *glow, shader, u });
+            }
+        });
     }
 
     /// --- 8. Etapa de fragmentos (en paralelo por filas) ---
     pub fn finish_frame(&mut self, sky: &(dyn Fn(Vec3, &Uniforms) -> Vec3 + Sync)) {
+        self.rasterize_all();
         let u = self.uniforms;
 
-        // --- 8a. Fragmentos aditivos: se sombrean en paralelo (cada uno es independiente) y
-        // luego se suman a `glow` en orden (sumar es barato; sombrear es lo caro).
-        let add_shaders = &self.additive_shaders;
-        self.additive_colors.resize(self.additive_frags.len(), Vec3::ZERO);
-        self.additive_colors.par_iter_mut().zip(self.additive_frags.par_iter()).for_each(|(out, (_, id, frag))| {
-            let mut f = *frag;
-            f.normal = f.normal.normalized();
-            *out = add_shaders[*id as usize - 1].shade(&f, &u);
-        });
-        for ((px, _, _), c) in self.additive_frags.iter().zip(&self.additive_colors) {
-            self.glow[*px as usize] += *c;
-        }
         let (w, h) = (self.width, self.height);
         let shaders = &self.shaders;
         let gbuffer = &self.gbuffer;
@@ -588,6 +601,130 @@ impl Renderer {
             data.extend_from_slice(&px[..3]);
         }
         std::fs::write(path, data)
+    }
+}
+
+/// Filas de pantalla por franja en el rasterizado en paralelo (360 filas → 45 franjas).
+const BAND_ROWS: usize = 8;
+
+/// Triángulo ya pasado a pantalla, listo para rasterizar. Los atributos vienen divididos por
+/// w (para la corrección de perspectiva) y la caja envolvente ya está recortada a la pantalla.
+#[derive(Clone, Copy)]
+struct ScreenTri {
+    x: [f32; 3],
+    y: [f32; 3],
+    iw: [f32; 3],
+    world: [Vec3; 3],
+    normal: [Vec3; 3],
+    local: [Vec3; 3],
+    uv: [(f32, f32); 3],
+    tangent: [Vec3; 3],
+    inv_area: f32,
+    min_x: usize,
+    max_x: usize,
+    min_y: usize,
+    max_y: usize,
+    draw: u16,
+}
+
+/// Qué hacer con cada píxel que cae dentro de un triángulo (el "destino" del rasterizado).
+/// `i` es el índice del píxel DENTRO de la franja.
+trait RasterTarget {
+    /// ¿Pasa la prueba de profundidad?
+    fn depth_ok(&self, i: usize, inv_w: f32) -> bool;
+    /// Guardar el fragmento que la pasó.
+    fn write(&mut self, i: usize, inv_w: f32, frag: Fragment);
+}
+
+/// Opacos: escriben profundidad, dueño y fragmento en su franja del G-buffer.
+struct OpaqueTarget<'a> {
+    gb: &'a mut [GPixel],
+    fr: &'a mut [Fragment],
+    draw: u16,
+}
+
+impl RasterTarget for OpaqueTarget<'_> {
+    fn depth_ok(&self, i: usize, inv_w: f32) -> bool {
+        inv_w > self.gb[i].inv_w
+    }
+    fn write(&mut self, i: usize, inv_w: f32, frag: Fragment) {
+        self.gb[i] = GPixel { inv_w, draw: self.draw };
+        self.fr[i] = frag;
+    }
+}
+
+/// Aditivos: solo leen la profundidad de lo opaco; el fragmento se sombrea ya y su luz se suma.
+struct AdditiveTarget<'a> {
+    gb: &'a [GPixel],
+    glow: &'a mut [Vec3],
+    shader: &'a dyn FragmentShader,
+    u: &'a Uniforms,
+}
+
+impl RasterTarget for AdditiveTarget<'_> {
+    fn depth_ok(&self, i: usize, inv_w: f32) -> bool {
+        inv_w > self.gb[i].inv_w
+    }
+    fn write(&mut self, i: usize, _inv_w: f32, frag: Fragment) {
+        let mut f = frag;
+        f.normal = f.normal.normalized();
+        self.glow[i] += self.shader.shade(&f, self.u);
+    }
+}
+
+/// Rasteriza el triángulo `t` solo en las filas de la franja que empieza en `band_y0`.
+/// Coordenadas baricéntricas con funciones de arista + prueba de profundidad con 1/w.
+fn raster_rows(t: &ScreenTri, band_y0: usize, width: usize, target: &mut impl RasterTarget) {
+    let ([x0, x1, x2], [y0, y1, y2], [iw0, iw1, iw2]) = (t.x, t.y, t.iw);
+    let inv_area = t.inv_area;
+    // OPTIMIZACIÓN: las funciones de arista son LINEALES en x, así que en vez de calcularlas
+    // desde cero en cada píxel (varias multiplicaciones) se calculan al inicio de la fila y
+    // luego solo se les SUMA un paso fijo por píxel.
+    let step0 = (y1 - y2) * inv_area; // cuánto cambia b0 al avanzar un píxel en x
+    let step1 = (y2 - y0) * inv_area; // cuánto cambia b1
+    let first = t.min_y.max(band_y0);
+    let last = t.max_y.min(band_y0 + BAND_ROWS - 1);
+    for py in first..=last {
+        let fy = py as f32 + 0.5;
+        let row = (py - band_y0) * width;
+        let fx0 = t.min_x as f32 + 0.5;
+        // Coordenadas baricéntricas (funciones de arista) en el primer píxel de la fila.
+        let mut b0 = ((x1 - fx0) * (y2 - fy) - (y1 - fy) * (x2 - fx0)) * inv_area;
+        let mut b1 = ((x2 - fx0) * (y0 - fy) - (y2 - fy) * (x0 - fx0)) * inv_area;
+        let mut inside_row = false;
+        for px in t.min_x..=t.max_x {
+            let (c0, c1) = (b0, b1);
+            b0 += step0;
+            b1 += step1;
+            let c2 = 1.0 - c0 - c1;
+            if c0 < 0.0 || c1 < 0.0 || c2 < 0.0 {
+                // El triángulo es convexo: si ya entramos a él en esta fila y salimos, el
+                // resto de la fila queda afuera → pasar a la siguiente fila.
+                if inside_row {
+                    break;
+                }
+                continue;
+            }
+            inside_row = true;
+            // 1/w sí es lineal en pantalla → sirve como profundidad.
+            let inv_w = c0 * iw0 + c1 * iw1 + c2 * iw2;
+            if !target.depth_ok(row + px, inv_w) {
+                continue; // prueba de profundidad: ya hay algo más cerca
+            }
+            let wcorr = 1.0 / inv_w;
+            let mix3 = |v: [Vec3; 3]| (v[0] * c0 + v[1] * c1 + v[2] * c2) * wcorr;
+            let frag = Fragment {
+                world_pos: mix3(t.world),
+                normal: mix3(t.normal), // se normaliza al sombrear
+                local_pos: mix3(t.local),
+                uv: (
+                    (t.uv[0].0 * c0 + t.uv[1].0 * c1 + t.uv[2].0 * c2) * wcorr,
+                    (t.uv[0].1 * c0 + t.uv[1].1 * c1 + t.uv[2].1 * c2) * wcorr,
+                ),
+                tangent: mix3(t.tangent),
+            };
+            target.write(row + px, inv_w, frag);
+        }
     }
 }
 
