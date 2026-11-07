@@ -106,14 +106,16 @@ pub struct Stats {
     pub triangles_rasterized: u32,
 }
 
-/// Lo que el G-buffer guarda por píxel tras la prueba de profundidad.
+/// Profundidad y dueño de cada píxel (el z-buffer). El fragmento va APARTE, en `frags`.
+/// OPTIMIZACIÓN: antes todo iba junto (~70 bytes por píxel). Separado, la prueba de
+/// profundidad y la limpieza de cada cuadro solo tocan 8 bytes por píxel: caben muchos más
+/// píxeles en la memoria caché del procesador.
 #[derive(Clone, Copy, Default)]
 struct GPixel {
     /// Profundidad = 1/w (más grande = más cerca). 0 = vacío.
     inv_w: f32,
     /// Índice del draw call dueño del píxel (para saber qué shader usar).
     draw: u16,
-    frag: Fragment,
 }
 
 /// Vértice después de la etapa de vértices.
@@ -146,6 +148,8 @@ pub struct Renderer {
     /// Imagen final RGBA8 que se sube a la textura de raylib.
     pub color: Vec<u8>,
     gbuffer: Vec<GPixel>,
+    /// Fragmento ganador de cada píxel (solo vale si gbuffer[i].draw != 0).
+    frags: Vec<Fragment>,
     /// Luz que se SUMA encima de la imagen (objetos aditivos, como la llama del turbo).
     glow: Vec<Vec3>,
     shaders: Vec<Arc<dyn FragmentShader>>,
@@ -173,6 +177,7 @@ impl Renderer {
             height,
             color: vec![0; width * height * 4],
             gbuffer: vec![GPixel::default(); width * height],
+            frags: vec![Fragment::default(); width * height],
             glow: vec![Vec3::ZERO; width * height],
             shaders: Vec::new(),
             additive_shaders: Vec::new(),
@@ -193,14 +198,10 @@ impl Renderer {
         self.shaders.clear();
         self.additive_shaders.clear();
         self.additive_frags.clear();
-        // OPTIMIZACIÓN: limpiar en paralelo y solo lo necesario. Del G-buffer basta borrar la
-        // profundidad y el dueño del píxel (draw = 0 → vacío): el fragmento solo se lee si
-        // alguien escribió encima, y en ese caso ya trae datos nuevos. Así se escriben 8 bytes
-        // por píxel en vez de ~70.
-        self.gbuffer.par_iter_mut().for_each(|g| {
-            g.inv_w = 0.0;
-            g.draw = 0;
-        });
+        // OPTIMIZACIÓN: limpiar en paralelo y solo lo necesario: la profundidad y el dueño del
+        // píxel (draw = 0 → vacío). Los fragmentos no se borran: solo se leen si alguien
+        // escribió encima en este cuadro, y en ese caso ya traen datos nuevos.
+        self.gbuffer.par_iter_mut().for_each(|g| *g = GPixel::default());
         self.glow.par_iter_mut().for_each(|g| *g = Vec3::ZERO);
     }
 
@@ -390,7 +391,8 @@ impl Renderer {
             }
             // 1/w es lineal en pantalla → sirve como profundidad.
             let inv_w = iw0 + (iw1 - iw0) * t;
-            let gp = &mut self.gbuffer[y as usize * self.width + x as usize];
+            let idx = y as usize * self.width + x as usize;
+            let gp = &mut self.gbuffer[idx];
             if inv_w <= gp.inv_w {
                 continue; // prueba de profundidad: un planeta o el sol está delante
             }
@@ -398,7 +400,7 @@ impl Renderer {
             let world = wa.lerp(wb, t) * wcorr;
             gp.inv_w = inv_w;
             gp.draw = draw_id;
-            gp.frag = Fragment {
+            self.frags[idx] = Fragment {
                 world_pos: world,
                 normal: Vec3::ZERO,
                 local_pos: world,
@@ -498,7 +500,7 @@ impl Renderer {
                 }
                 gp.inv_w = inv_w;
                 gp.draw = draw_id;
-                gp.frag = frag;
+                self.frags[row + px] = frag;
             }
         }
     }
@@ -522,6 +524,7 @@ impl Renderer {
         let (w, h) = (self.width, self.height);
         let shaders = &self.shaders;
         let gbuffer = &self.gbuffer;
+        let frags = &self.frags;
         let glow = &self.glow;
         let ty = (u.fov_y * 0.5).tan();
         let tx = ty * u.aspect;
@@ -535,7 +538,7 @@ impl Renderer {
                     let dir = (u.camera_forward + u.camera_right * (ndc_x * tx) + u.camera_up * (ndc_y * ty)).normalized();
                     sky(dir, &u)
                 } else {
-                    let mut f = gp.frag;
+                    let mut f = frags[y * w + x];
                     f.normal = f.normal.normalized();
                     shaders[gp.draw as usize - 1].shade(&f, &u)
                 };
