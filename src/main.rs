@@ -9,6 +9,7 @@ mod hud;
 mod interaction;
 mod math;
 mod mesh;
+mod mundos;
 mod noise;
 mod normal_map;
 mod oa;
@@ -93,6 +94,8 @@ struct Game {
     creatures: Vec<Creature>,
     /// Batería, torres, anillo, patrulla y auroras de Oa (oa.rs).
     oa: Option<oa::Oa>,
+    /// Monumentos y detalles de cada mundo (carpeta mundos/).
+    mundos: mundos::Mundos,
     ship: Ship,
     ship_mesh: Mesh,
     /// true si cargo el halcon, false si estamos con el modelo de respaldo
@@ -155,6 +158,7 @@ impl Game {
         let state = GameState::new(&scene);
         let creatures = create_creatures(&scene);
         let oa = oa::Oa::new(&scene);
+        let mundos = mundos::Mundos::new(&scene);
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene,
@@ -162,6 +166,7 @@ impl Game {
             comet: Comet::new(),
             creatures,
             oa,
+            mundos,
             ship,
             ship_mesh,
             ship_is_halcon,
@@ -289,6 +294,7 @@ impl Game {
         if let Some(oa) = &self.oa {
             oa.draw(&mut self.renderer, &self.scene, self.time);
         }
+        self.mundos.draw(&mut self.renderer, &self.scene, self.time);
         let model = self.ship.model_matrix(1.0);
         // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
         let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
@@ -305,6 +311,7 @@ impl Game {
         if let Some(oa) = &self.oa {
             oa.draw_glow(&mut self.renderer, &self.scene, self.time);
         }
+        self.mundos.draw_glow(&mut self.renderer, &self.scene, self.time);
 
         // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
         if self.ship.boost > 0.01 {
