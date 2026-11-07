@@ -55,6 +55,9 @@ const KRYPTON_FACET_TILT: f32 = 0.55;
 const KRYPTON_VEIN_WIDTH: f32 = 0.08;
 /// Intensidad del brillo rojo de las venas (> 1 satura hacia blanco en el centro).
 const KRYPTON_VEIN_GLOW: f32 = 1.4;
+/// Latido de las venas: cuánto cambia su brillo y qué tan rápido.
+const KRYPTON_PULSE: f32 = 0.35;
+const KRYPTON_PULSE_SPEED: f32 = 2.0;
 /// Brillo especular de los cristales: intensidad y dureza.
 const KRYPTON_SPEC: f32 = 1.2;
 const KRYPTON_SHININESS: f32 = 60.0;
@@ -400,7 +403,10 @@ impl FragmentShader for KryptonShader {
 
         // --- Venas rojas emisivas en los bordes de las celdas ---
         let vein = 1.0 - smoothstep(0.0, KRYPTON_VEIN_WIDTH, f2 - f1);
-        let glow = KRYPTON_VEIN_RED * KRYPTON_VEIN_GLOW + Vec3::splat(0.6) * vein.powf(6.0); // centro casi blanco
+        // Las venas PULSAN: una onda de brillo que recorre el planeta de polo a polo, como un
+        // latido (el planeta "respira" lava).
+        let beat = 1.0 + KRYPTON_PULSE * (u.time * KRYPTON_PULSE_SPEED - dir.y * 4.0).sin();
+        let glow = (KRYPTON_VEIN_RED * KRYPTON_VEIN_GLOW + Vec3::splat(0.6) * vein.powf(6.0)) * beat; // centro casi blanco
         mix(crystal, glow, vein)
     }
 }

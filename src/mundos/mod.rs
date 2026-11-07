@@ -12,6 +12,7 @@
 pub mod atmosfera;
 pub mod sol;
 pub mod themyscira;
+pub mod krypton;
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, Vertex};
@@ -19,21 +20,30 @@ use crate::props::{instance_model, PropInstance};
 use crate::renderer::{Fragment, FragmentShader, Renderer, Uniforms};
 use crate::scene::Scene;
 
-/// Todo lo extra de los mundos.
+/// Todo lo extra de los mundos. Cada uno es Option: si ese mundo no está en la escena, no se arma.
 pub struct Mundos {
     atmosferas: atmosfera::Atmosferas,
     sol: Option<sol::Sol>,
-    pub themyscira: Option<themyscira::Themyscira>,
+    themyscira: Option<themyscira::Themyscira>,
+    krypton: Option<krypton::Krypton>,
 }
 
 impl Mundos {
     pub fn new(scene: &Scene) -> Mundos {
-        Mundos { atmosferas: atmosfera::Atmosferas::new(scene), sol: sol::Sol::new(scene), themyscira: themyscira::Themyscira::new(scene) }
+        Mundos {
+            atmosferas: atmosfera::Atmosferas::new(scene),
+            sol: sol::Sol::new(scene),
+            themyscira: themyscira::Themyscira::new(scene),
+            krypton: krypton::Krypton::new(scene),
+        }
     }
 
     /// Lo opaco (modelos): va junto con el resto de la escena.
     pub fn draw(&self, r: &mut Renderer, scene: &Scene, t: f32) {
         if let Some(w) = &self.themyscira {
+            w.draw(r, scene, t);
+        }
+        if let Some(w) = &self.krypton {
             w.draw(r, scene, t);
         }
     }
@@ -45,6 +55,10 @@ impl Mundos {
             let (p, up) = w.landmark(scene, t);
             list.push(("templo", p, up, 1.0));
         }
+        if let Some(w) = &self.krypton {
+            let (p, up) = w.landmark(scene, t);
+            list.push(("fortaleza", p, up, 2.2));
+        }
         list
     }
 
@@ -55,6 +69,9 @@ impl Mundos {
             s.draw_glow(r, scene, t);
         }
         if let Some(w) = &self.themyscira {
+            w.draw_glow(r, scene, t);
+        }
+        if let Some(w) = &self.krypton {
             w.draw_glow(r, scene, t);
         }
     }
@@ -109,6 +126,51 @@ pub fn quad_both_sides(m: &mut Mesh, corners: [(Vec3, (f32, f32)); 4]) {
     }
     m.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     m.indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+}
+
+/// Cono abierto a lo largo de +Y: radio `base` en y = 0 y radio 1 en y = 1. Sirve para chorros
+/// y haces de luz (se escala con el largo y el ancho que haga falta).
+pub fn cone_mesh(segments: usize, base: f32) -> Mesh {
+    let mut m = Mesh::default();
+    for (y, r) in [(0.0, base), (1.0, 1.0)] {
+        for j in 0..segments {
+            let a = j as f32 / segments as f32 * std::f32::consts::TAU;
+            m.vertices.push(Vertex { position: Vec3::new(a.cos() * r, y, a.sin() * r), normal: Vec3::ZERO, uv: (0.0, y), tangent: Vec3::ZERO });
+        }
+    }
+    for j in 0..segments {
+        let k = (j + 1) % segments;
+        let (a, b, c, d) = (j as u32, k as u32, (segments + j) as u32, (segments + k) as u32);
+        m.indices.extend([a, c, d, a, d, b]); // antihorario visto desde afuera
+    }
+    m.recompute_normals();
+    m.compute_bounds();
+    m
+}
+
+/// Haz o chorro de luz con forma de cono (aditivo): brilla más al centro (donde lo vemos de
+/// frente) y se apaga hacia la punta. La normal se reconstruye desde el eje, porque la escala
+/// no uniforme del cono deforma la de la malla.
+pub struct BeamShader {
+    pub origin: Vec3,
+    pub dir: Vec3,
+    pub length: f32,
+    /// Color en la base y en la punta.
+    pub base_color: Vec3,
+    pub tip_color: Vec3,
+    pub brightness: f32,
+}
+
+impl FragmentShader for BeamShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let rel = f.world_pos - self.origin;
+        let along = (rel.dot(self.dir) / self.length).clamp(0.0, 1.0);
+        let normal = (rel - self.dir * rel.dot(self.dir)).normalized();
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let facing = normal.dot(v).abs();
+        let color = self.base_color + (self.tip_color - self.base_color) * along;
+        color * (self.brightness * facing * facing * (1.0 - 0.7 * along))
+    }
 }
 
 /// Transición suave de 0 a 1 entre a y b.
