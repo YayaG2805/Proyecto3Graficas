@@ -1129,7 +1129,16 @@ impl Sky {
         // Resplandor alrededor del sol (depende de la cámara, así que también va en vivo).
         let to_sun = (u.light_pos - u.camera_pos).normalized();
         let g = view_dir.dot(to_sun).max(0.0);
-        c += Vec3::new(1.0, 0.55, 0.15) * (g.powf(60.0) * 0.6 + g.powf(8.0) * 0.08);
+        // OPTIMIZACIÓN: g^8 y g^60 con multiplicaciones (elevar al cuadrado varias veces) en vez
+        // de powf, que es mucho más lenta; da lo mismo. Si g es chico ni se calcula (g^8 ≈ 0).
+        if g > 0.3 {
+            let g2 = g * g;
+            let g4 = g2 * g2;
+            let g8 = g4 * g4;
+            let g16 = g8 * g8;
+            let g60 = g16 * g16 * g16 * g8 * g4; // 16+16+16+8+4 = 60
+            c += Vec3::new(1.0, 0.55, 0.15) * (g60 * 0.6 + g8 * 0.08);
+        }
 
         // Disco de acreción y anillo de fotones del agujero negro (cero lejos de él).
         c += hole.emission;
@@ -1182,10 +1191,12 @@ struct BlackHole {
 fn black_hole(dir: Vec3, time: f32) -> BlackHole {
     let c = BH_DIR.normalized();
     let cos_t = dir.dot(c).clamp(-1.0, 1.0);
-    let theta = cos_t.acos();
-    if theta > BH_INFLUENCE {
+    // OPTIMIZACIÓN: comparar cosenos (ángulo > límite ⇔ coseno < cos(límite)) evita calcular
+    // acos en los miles de píxeles del cielo que están lejos del agujero.
+    if cos_t < BH_INFLUENCE.cos() {
         return BlackHole { dir, in_shadow: false, emission: Vec3::ZERO }; // lejos: sin efecto
     }
+    let theta = cos_t.acos();
 
     // Base alrededor del centro del agujero: e1 "a la derecha", e2 "hacia arriba".
     let e1 = c.cross(Vec3::UP).normalized();
