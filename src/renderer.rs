@@ -26,6 +26,10 @@ use std::sync::Arc;
 
 /// cuando el objeto se ve mas chico q estos tamaños (tamaño / distancia) pasamos al siguiente lod
 const LOD_THRESHOLDS: [f32; 3] = [0.5, 0.15, 0.05];
+/// Si un objeto mide menos que esto en pantalla (radio en píxeles), no se dibuja (con LOD activo).
+const MIN_PIXEL_RADIUS: f32 = 0.5;
+/// Desde cuántos vértices la etapa de vértices se reparte entre todos los núcleos.
+const PARALLEL_VERTICES: usize = 2048;
 
 /// Datos globales del cuadro que reciben todos los shaders.
 #[derive(Clone, Copy, Debug)]
@@ -232,8 +236,22 @@ impl Renderer {
         if lods.is_empty() {
             return false;
         }
+        if self.use_lod && self.pixel_radius(&lods[0], model) < MIN_PIXEL_RADIUS {
+            // OPTIMIZACIÓN: mide menos de medio píxel en pantalla → no se notaría; no se dibuja.
+            self.stats.objects_culled += 1;
+            return false;
+        }
         let level = if self.use_lod { self.pick_lod(lods, model) } else { 0 };
         self.draw_mesh(&lods[level], model, shader)
+    }
+
+    /// Radio aproximado del objeto en PÍXELES: su tamaño aparente (radio / distancia) por los
+    /// píxeles que caben en una unidad de tangente del campo de visión.
+    fn pixel_radius(&self, mesh: &Mesh, model: &Mat4) -> f32 {
+        let u = &self.uniforms;
+        let dist = (model.transform_point(Vec3::ZERO) - u.camera_pos).length().max(0.001);
+        let apparent = mesh.bounding_radius * max_scale(model) / dist;
+        apparent * self.height as f32 * 0.5 / (u.fov_y * 0.5).tan()
     }
 
     // cual lod usar: entre mas chico se ve el objeto en pantalla, menos triangulos necesita
@@ -255,7 +273,8 @@ impl Renderer {
     /// Dibuja una malla ADITIVA (luz: llamas, brillos). Diferencias con `draw_mesh`:
     ///   - Hace la prueba de profundidad contra lo opaco, pero NO escribe en el z-buffer,
     ///     así que lo que está detrás se sigue viendo (parece transparente).
-    ///   - El shader se ejecuta en el momento (no al final) y su color se SUMA en `glow`.
+    ///   - Sus fragmentos se sombrean al final, todos juntos y en paralelo, y su color se SUMA
+    ///     en `glow`.
     /// Se debe llamar DESPUÉS de dibujar todos los objetos opacos del cuadro.
     pub fn draw_mesh_additive(&mut self, mesh: &Mesh, model: &Mat4, shader: Arc<dyn FragmentShader>) -> bool {
         self.draw_mesh_mode(mesh, model, shader, true)
@@ -289,7 +308,8 @@ impl Renderer {
         let mvp = self.uniforms.projection * self.uniforms.view * *model;
         let mut verts = std::mem::take(&mut self.scratch_verts);
         verts.clear();
-        verts.extend(mesh.vertices.iter().map(|v| {
+        let model = *model;
+        let transform = move |v: &crate::mesh::Vertex| {
             let p = v.position;
             ClipVertex {
                 clip: mvp.transform_vec4(Vec4::new(p.x, p.y, p.z, 1.0)),
@@ -300,7 +320,15 @@ impl Renderer {
                 // La tangente es una dirección, igual que la normal: gira con el objeto.
                 tangent: model.transform_dir(v.tangent),
             }
-        }));
+        };
+        // OPTIMIZACIÓN: las mallas grandes (los planetas cercanos tienen ~10 000 vértices)
+        // transforman sus vértices en paralelo; cada vértice es independiente. Las pequeñas
+        // no, porque repartir el trabajo entre hilos cuesta más que hacerlo directo.
+        if mesh.vertices.len() >= PARALLEL_VERTICES {
+            verts.par_extend(mesh.vertices.par_iter().map(transform));
+        } else {
+            verts.extend(mesh.vertices.iter().map(transform));
+        }
 
         // --- 3. Ensamblado de triángulos ---
         for tri in mesh.indices.chunks_exact(3) {
