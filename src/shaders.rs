@@ -239,6 +239,13 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 // SOL: shader ANIMADO. Ruido fBm que se desplaza con el tiempo (manchas/plasma)
 // y un borde más brillante. No recibe luz: emite la suya.
 // ---------------------------------------------------------------------------
+/// Manchas solares: tamaño del ruido, desde qué valor hay mancha, qué tanto oscurece y su
+/// velocidad de desplazamiento.
+const SUN_SPOT_SCALE: f32 = 2.6;
+const SUN_SPOT_START: f32 = 0.26;
+const SUN_SPOT_DARK: f32 = 0.55;
+const SUN_SPOT_DRIFT: f32 = 0.02;
+
 pub struct SunShader {
     pub seed: u32,
     /// Qué tan rápido "hierve" la superficie.
@@ -257,6 +264,13 @@ impl FragmentShader for SunShader {
         let mid = Vec3::new(1.0, 0.6, 0.1);
         let hot = Vec3::new(1.0, 0.95, 0.6);
         let mut c = if n < 0.5 { mix(deep, mid, n * 2.0) } else { mix(mid, hot, (n - 0.5) * 2.0) };
+
+        // Manchas solares: donde un ruido grande y lento supera un umbral, la superficie se
+        // oscurece (el centro más que la orilla de la mancha). Se desplazan muy despacio.
+        let drift = Vec3::new(0.0, u.time * SUN_SPOT_DRIFT, 0.0);
+        let spot = fbm(f.local_pos * SUN_SPOT_SCALE + drift, 3, self.seed + 31);
+        let spots = smoothstep(SUN_SPOT_START, SUN_SPOT_START + 0.1, spot);
+        c = c * (1.0 - SUN_SPOT_DARK * spots);
 
         // Borde brillante (fresnel): donde la normal es casi perpendicular a la vista.
         let view = (u.camera_pos - f.world_pos).normalized();

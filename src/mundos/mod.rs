@@ -10,6 +10,7 @@
 //! Aquí están las herramientas que comparten.
 
 pub mod atmosfera;
+pub mod sol;
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, Vertex};
@@ -20,11 +21,12 @@ use crate::scene::Scene;
 /// Todo lo extra de los mundos.
 pub struct Mundos {
     atmosferas: atmosfera::Atmosferas,
+    sol: Option<sol::Sol>,
 }
 
 impl Mundos {
     pub fn new(scene: &Scene) -> Mundos {
-        Mundos { atmosferas: atmosfera::Atmosferas::new(scene) }
+        Mundos { atmosferas: atmosfera::Atmosferas::new(scene), sol: sol::Sol::new(scene) }
     }
 
     /// Lo opaco (modelos): va junto con el resto de la escena.
@@ -33,6 +35,9 @@ impl Mundos {
     /// Lo aditivo (luz): va después de todo lo opaco.
     pub fn draw_glow(&self, r: &mut Renderer, scene: &Scene, t: f32) {
         self.atmosferas.draw_glow(r, scene, t);
+        if let Some(s) = &self.sol {
+            s.draw_glow(r, scene, t);
+        }
     }
 }
 
