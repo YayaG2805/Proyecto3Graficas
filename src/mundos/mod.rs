@@ -11,6 +11,7 @@
 
 pub mod atmosfera;
 pub mod sol;
+pub mod themyscira;
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, Vertex};
@@ -22,21 +23,39 @@ use crate::scene::Scene;
 pub struct Mundos {
     atmosferas: atmosfera::Atmosferas,
     sol: Option<sol::Sol>,
+    pub themyscira: Option<themyscira::Themyscira>,
 }
 
 impl Mundos {
     pub fn new(scene: &Scene) -> Mundos {
-        Mundos { atmosferas: atmosfera::Atmosferas::new(scene), sol: sol::Sol::new(scene) }
+        Mundos { atmosferas: atmosfera::Atmosferas::new(scene), sol: sol::Sol::new(scene), themyscira: themyscira::Themyscira::new(scene) }
     }
 
     /// Lo opaco (modelos): va junto con el resto de la escena.
-    pub fn draw(&self, _r: &mut Renderer, _scene: &Scene, _t: f32) {}
+    pub fn draw(&self, r: &mut Renderer, scene: &Scene, t: f32) {
+        if let Some(w) = &self.themyscira {
+            w.draw(r, scene, t);
+        }
+    }
+
+    /// Monumentos para las capturas del snapshot: (nombre, base, "arriba", tamaño).
+    pub fn landmarks(&self, scene: &Scene, t: f32) -> Vec<(&'static str, Vec3, Vec3, f32)> {
+        let mut list = Vec::new();
+        if let Some(w) = &self.themyscira {
+            let (p, up) = w.landmark(scene, t);
+            list.push(("templo", p, up, 1.0));
+        }
+        list
+    }
 
     /// Lo aditivo (luz): va después de todo lo opaco.
     pub fn draw_glow(&self, r: &mut Renderer, scene: &Scene, t: f32) {
         self.atmosferas.draw_glow(r, scene, t);
         if let Some(s) = &self.sol {
             s.draw_glow(r, scene, t);
+        }
+        if let Some(w) = &self.themyscira {
+            w.draw_glow(r, scene, t);
         }
     }
 }

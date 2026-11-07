@@ -29,6 +29,11 @@ const THEMYSCIRA_STONE_START: f32 = 0.16;
 const THEMYSCIRA_DEEP: f32 = 0.15;
 /// Ancho de la espuma blanca en la orilla (en elevación).
 const THEMYSCIRA_FOAM: f32 = 0.012;
+/// Olas que llegan a la playa: qué tan juntas (por profundidad), qué tan rápido y hasta qué
+/// profundidad se ven.
+const THEMYSCIRA_WAVE_FREQ: f32 = 450.0;
+const THEMYSCIRA_WAVE_SPEED: f32 = 2.0;
+const THEMYSCIRA_WAVE_RANGE: f32 = 0.045;
 /// Brillo del sol sobre el mar (Blinn-Phong): intensidad y dureza.
 const THEMYSCIRA_SPEC: f32 = 0.9;
 const THEMYSCIRA_SHININESS: f32 = 90.0;
@@ -318,6 +323,11 @@ impl FragmentShader for ThemysciraShader {
             // Espuma: una franja blanca muy delgada pegada a la orilla.
             let foam = 1.0 - smoothstep(0.0, THEMYSCIRA_FOAM, depth);
             water = mix(water, Vec3::splat(0.9), foam * 0.6);
+            // Olas que llegan a la orilla: franjas de espuma paralelas a la costa (siguen la
+            // profundidad) que avanzan hacia la playa con el tiempo y se apagan mar adentro.
+            let wave = (depth * THEMYSCIRA_WAVE_FREQ + u.time * THEMYSCIRA_WAVE_SPEED).sin();
+            let near = 1.0 - smoothstep(0.0, THEMYSCIRA_WAVE_RANGE, depth);
+            water = mix(water, Vec3::splat(0.95), smoothstep(0.75, 1.0, wave) * near * 0.7);
 
             let n = f.normal; // el mar es liso: normal de la esfera, sin mapa de normales
             let v = (u.camera_pos - f.world_pos).normalized();

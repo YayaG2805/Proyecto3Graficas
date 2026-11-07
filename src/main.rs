@@ -436,6 +436,18 @@ fn snapshot() {
         println!("snap_oa_*.ppm: listo");
     }
 
+    // Monumentos de cada mundo (carpeta mundos/): vista de lado, un poco desde arriba.
+    for (name, base, up, size) in g.mundos.landmarks(&g.scene, g.time) {
+        let across = up.cross(if up.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) }).normalized();
+        let target = base + up * (size * 0.5);
+        g.camera.position = target + across * (size * 3.0) + up * (size * 1.2);
+        g.camera.target = target;
+        g.camera.up = up;
+        g.ship.position = g.camera.position + up * 40.0;
+        g.render();
+        g.renderer.save_ppm(&format!("snap_monumento_{name}.ppm")).expect("no se pudo guardar");
+    }
+
     // Un retrato de cada mundo desde su lado iluminado, con la nave en primer plano,
     // y otro a ras de suelo junto a uno de sus objetos de superficie (árboles, cristales...).
     for i in 0..g.scene.bodies.len() {
