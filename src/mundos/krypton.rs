@@ -56,7 +56,7 @@ impl Krypton {
     }
 
     pub fn draw(&self, r: &mut Renderer, scene: &Scene, t: f32) {
-        let shader = PaletteShader { palette: FORTRESS_PALETTE.to_vec(), glow: vec![(0, 0.2), (2, 0.9)], rim: Vec3::new(0.5, 0.9, 1.0) };
+        let shader = PaletteShader { palette: FORTRESS_PALETTE.to_vec(), glow: vec![(0, 0.2), (2, 0.9)], rim: Vec3::new(0.5, 0.9, 1.0), blink: None };
         r.draw_lods(&self.fortress, &on_surface(scene, self.home, FORTRESS_DIR, 0.0, t), Arc::new(shader));
     }
 

@@ -10,7 +10,7 @@ use crate::math::Vec3;
 use crate::mesh::{sphere_dir, sphere_uv};
 use crate::noise::{fbm, hash01, voronoi3};
 use crate::normal_map::NormalMap;
-use crate::renderer::{Fragment, FragmentShader, Uniforms};
+use crate::renderer::{sun_visibility, Fragment, FragmentShader, Uniforms};
 use crate::texture::Texture;
 
 // ---------------------------------------------------------------------------
@@ -537,7 +537,7 @@ impl FragmentShader for GothamShader {
         let dir = f.local_pos.normalized();
         let c = gotham_cell(dir, self.seed);
         let l = (u.light_pos - f.world_pos).normalized();
-        let diff = f.normal.dot(l).max(0.0);
+        let diff = f.normal.dot(l).max(0.0) * sun_visibility(u, f.world_pos); // con eclipse: sombra de la luna
         let light = GOTHAM_AMBIENT + (1.0 - GOTHAM_AMBIENT) * diff;
         // 0 = noche cerrada, 1 = día. Transición suave alrededor del umbral.
         let night = 1.0 - smoothstep(GOTHAM_NIGHT - 0.08, GOTHAM_NIGHT + 0.08, diff);
@@ -929,7 +929,7 @@ impl FragmentShader for TowerPropShader {
     fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
         let p = f.local_pos;
         let l = (u.light_pos - f.world_pos).normalized();
-        let diff = f.normal.dot(l).max(0.0);
+        let diff = f.normal.dot(l).max(0.0) * sun_visibility(u, f.world_pos); // con eclipse: sombra de la luna
         let night = 1.0 - smoothstep(GOTHAM_NIGHT - 0.08, GOTHAM_NIGHT + 0.08, diff);
         let light = GOTHAM_AMBIENT + (1.0 - GOTHAM_AMBIENT) * diff;
 

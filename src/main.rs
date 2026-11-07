@@ -204,6 +204,7 @@ impl Game {
             light_pos: Vec3::ZERO, // el sol está en el origen
             normal_mapping,
             warp,
+            eclipse: (Vec3::ZERO, 0.0),
         }
     }
 
@@ -284,7 +285,9 @@ impl Game {
 
     /// Etapas 1 a 7 (vértices, recorte, rasterizado, z-buffer). El sombreado va aparte.
     fn draw_geometry(&mut self) {
-        let u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp, self.ship.position);
+        let mut u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp, self.ship.position);
+        // La luna Central City puede tapar el sol sobre Gotham (eclipse).
+        u.eclipse = mundos::gotham::eclipse(&self.scene, self.time);
         self.renderer.begin_frame(u);
         self.scene.draw(&mut self.renderer, self.time);
         self.state.draw_collectibles(&mut self.renderer, &self.scene, self.time);
@@ -434,6 +437,28 @@ fn snapshot() {
         g.render();
         g.renderer.save_ppm("snap_oa_anillo.ppm").expect("no se pudo guardar");
         println!("snap_oa_*.ppm: listo");
+    }
+
+    // Eclipse: busca el momento en que la luna Central City pasa entre el sol y Gotham y mira
+    // a Gotham desde el lado del sol, para ver la sombra.
+    if let (Some(gi), Some(ci)) = (
+        g.scene.bodies.iter().position(|b| b.name == "Gotham"),
+        g.scene.bodies.iter().position(|b| b.name == "Central City"),
+    ) {
+        let lined_up = |t: f32| {
+            let (gp, cp) = (g.scene.body_position(gi, t), g.scene.body_position(ci, t));
+            (cp - gp).normalized().dot((-gp).normalized()) // 1 = la luna justo hacia el sol
+        };
+        let best = (0..400).map(|k| k as f32 * 0.05).fold(0.0f32, |b, t| if lined_up(t) > lined_up(b) { t } else { b });
+        let saved = g.time;
+        g.time = best;
+        let center = g.scene.body_position(gi, best);
+        let to_sun = (-center).normalized();
+        let gotham_radius = g.scene.bodies[gi].radius;
+        aim_ship_at(&mut g, center + (to_sun * 3.2 + Vec3::UP * 1.2) * gotham_radius, center);
+        g.render();
+        g.renderer.save_ppm("snap_eclipse.ppm").expect("no se pudo guardar");
+        g.time = saved;
     }
 
     // Monumentos de cada mundo (carpeta mundos/): vista de lado, un poco desde arriba.

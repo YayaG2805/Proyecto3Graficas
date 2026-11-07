@@ -13,6 +13,7 @@ pub mod atmosfera;
 pub mod sol;
 pub mod themyscira;
 pub mod krypton;
+pub mod gotham;
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, Vertex};
@@ -26,6 +27,7 @@ pub struct Mundos {
     sol: Option<sol::Sol>,
     themyscira: Option<themyscira::Themyscira>,
     krypton: Option<krypton::Krypton>,
+    gotham: Option<gotham::Gotham>,
 }
 
 impl Mundos {
@@ -35,6 +37,7 @@ impl Mundos {
             sol: sol::Sol::new(scene),
             themyscira: themyscira::Themyscira::new(scene),
             krypton: krypton::Krypton::new(scene),
+            gotham: gotham::Gotham::new(scene),
         }
     }
 
@@ -44,6 +47,9 @@ impl Mundos {
             w.draw(r, scene, t);
         }
         if let Some(w) = &self.krypton {
+            w.draw(r, scene, t);
+        }
+        if let Some(w) = &self.gotham {
             w.draw(r, scene, t);
         }
     }
@@ -59,6 +65,10 @@ impl Mundos {
             let (p, up) = w.landmark(scene, t);
             list.push(("fortaleza", p, up, 2.2));
         }
+        if let Some(w) = &self.gotham {
+            let (p, up) = w.landmark(scene, t);
+            list.push(("torre_wayne", p, up, 2.4));
+        }
         list
     }
 
@@ -72,6 +82,9 @@ impl Mundos {
             w.draw_glow(r, scene, t);
         }
         if let Some(w) = &self.krypton {
+            w.draw_glow(r, scene, t);
+        }
+        if let Some(w) = &self.gotham {
             w.draw_glow(r, scene, t);
         }
     }
@@ -188,6 +201,8 @@ pub struct PaletteShader {
     pub glow: Vec<(usize, f32)>,
     /// Color de la luz de borde (recorta la silueta contra el espacio).
     pub rim: Vec3,
+    /// Banda que PARPADEA (luces de aviso), si hay.
+    pub blink: Option<usize>,
 }
 
 impl FragmentShader for PaletteShader {
@@ -199,7 +214,10 @@ impl FragmentShader for PaletteShader {
         let v = (u.camera_pos - f.world_pos).normalized();
         let diff = f.normal.dot(l).max(0.0);
         let rim = (1.0 - f.normal.dot(v).max(0.0)).powf(3.0);
-        let emit = self.glow.iter().find(|(b, _)| *b == band).map_or(0.0, |(_, k)| *k);
+        let mut emit = self.glow.iter().find(|(b, _)| *b == band).map_or(0.0, |(_, k)| *k);
+        if self.blink == Some(band) {
+            emit *= if (u.time * 3.0).sin() > 0.3 { 1.0 } else { 0.15 };
+        }
         base * (0.12 + 0.88 * diff + emit) + self.rim * (rim * 0.4)
     }
 }

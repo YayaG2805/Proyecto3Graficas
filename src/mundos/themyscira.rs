@@ -51,7 +51,7 @@ impl Themyscira {
     }
 
     pub fn draw(&self, r: &mut Renderer, scene: &Scene, t: f32) {
-        let shader = PaletteShader { palette: TEMPLE_PALETTE.to_vec(), glow: vec![(1, 0.15)], rim: Vec3::new(1.0, 0.9, 0.7) };
+        let shader = PaletteShader { palette: TEMPLE_PALETTE.to_vec(), glow: vec![(1, 0.15)], rim: Vec3::new(1.0, 0.9, 0.7), blink: None };
         r.draw_lods(&self.temple, &on_surface(scene, self.home, self.temple_dir, 0.0, t), Arc::new(shader));
     }
 

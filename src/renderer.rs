@@ -52,6 +52,27 @@ pub struct Uniforms {
     pub normal_mapping: bool,
     /// Qué tan avanzado va el warp: 0 = vuelo normal, 1 = velocidad máxima (rayas en el cielo).
     pub warp: f32,
+    /// ECLIPSE: esfera (centro, radio) que puede tapar el sol, p. ej. la luna Central City sobre
+    /// Gotham. Radio 0 = no hay. La usa `sun_visibility`.
+    pub eclipse: (Vec3, f32),
+}
+
+/// ¿Cuánto sol le llega al punto `p`? 1 = todo, 0 = sombra total del eclipse.
+/// Se traza el rayo de `p` hacia el sol y se mide qué tan cerca pasa del centro de la esfera
+/// que tapa: si pasa por dentro de ella hay sombra; cerca del borde, penumbra (transición suave).
+pub fn sun_visibility(u: &Uniforms, p: Vec3) -> f32 {
+    let (center, radius) = u.eclipse;
+    if radius <= 0.0 {
+        return 1.0;
+    }
+    let to_sun = (u.light_pos - p).normalized();
+    let along = (center - p).dot(to_sun);
+    if along <= 0.0 {
+        return 1.0; // la esfera está detrás del punto, no entre él y el sol
+    }
+    let closest = (center - (p + to_sun * along)).length();
+    let t = ((closest - radius * 0.7) / (radius * 0.6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Lo que recibe un fragment shader por cada píxel.
