@@ -420,6 +420,7 @@ fn snapshot() {
     }
 
     // Oa: la Batería Central de cerca (con torres y Linterna Verde) y el planeta con su anillo.
+    g.time = 2.0; // en t = 2 s el puño (constructo) de Oa ya apareció
     if let Some((base, up)) = g.oa.as_ref().map(|oa| oa.battery_spot(&g.scene, g.time)) {
         let across = up.cross(Vec3::UP).normalized();
         let target = base + up * 1.2;
@@ -438,6 +439,7 @@ fn snapshot() {
         g.renderer.save_ppm("snap_oa_anillo.ppm").expect("no se pudo guardar");
         println!("snap_oa_*.ppm: listo");
     }
+    g.time = 0.0;
 
     // Eclipse: busca el momento en que la luna Central City pasa entre el sol y Gotham y mira
     // a Gotham desde el lado del sol, para ver la sombra.

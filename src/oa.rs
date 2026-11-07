@@ -32,6 +32,13 @@ const BATTERY_HEIGHT: f32 = 1.4;
 const BATTERY_AURA: f32 = 1.3;
 const BATTERY_PULSE_SPEED: f32 = 2.0;
 
+// --- Constructo (puño gigante de luz) ---
+/// Cada cuántos segundos aparece, qué fracción del tiempo se ve, su tamaño y el golpe.
+const CONSTRUCT_PERIOD: f32 = 10.0;
+const CONSTRUCT_ACTIVE: f32 = 0.45;
+const CONSTRUCT_SIZE: f32 = 0.9;
+const CONSTRUCT_PUNCH: f32 = 1.2;
+
 // --- Torres de los Guardianes ---
 /// Semilla, cantidad y alto de las torres. Cambiar la semilla cambia dónde quedan.
 pub const TOWER_SEED: u32 = 4242;
@@ -90,6 +97,7 @@ pub struct Oa {
     ring: Mesh,
     aurora: Mesh,
     aura: Mesh,
+    fist: Vec<Mesh>,
 }
 
 impl Oa {
@@ -115,6 +123,7 @@ impl Oa {
             ring: ring_mesh(64),
             aurora: aurora_mesh(64),
             aura: Mesh::icosphere(2, &|_| 1.0),
+            fist: crate::mundos::load_model("puno_oa"),
         })
     }
 
@@ -196,6 +205,21 @@ impl Oa {
         let core = self.battery_model(scene, t).transform_point(Vec3::new(0.0, BATTERY_HEIGHT * 0.45, 0.0));
         let aura_model = Mat4::translation(core) * Mat4::scale(Vec3::splat(BATTERY_HEIGHT * BATTERY_AURA));
         r.draw_mesh_additive(&self.aura, &aura_model, Arc::new(BatteryAuraShader));
+
+        // CONSTRUCTO: cada CONSTRUCT_PERIOD segundos aparece un puño verde gigante sobre la
+        // batería, da un golpe hacia adelante y se desvanece (es pura luz: aditivo).
+        let cycle = t / CONSTRUCT_PERIOD;
+        let s = (cycle - cycle.floor()) / CONSTRUCT_ACTIVE; // 0..1 mientras se ve
+        if s < 1.0 {
+            let grow = smoothstep(0.0, 0.15, s) * (1.0 - smoothstep(0.85, 1.0, s));
+            let battery = self.battery_model(scene, t);
+            let up = battery.transform_dir(Vec3::UP).normalized();
+            let forward = battery.transform_dir(Vec3::new(1.0, 0.0, 0.0)).normalized();
+            let punch = (s * PI * 2.0).sin().max(0.0) * CONSTRUCT_PUNCH; // golpe hacia adelante
+            let pos = battery.transform_point(Vec3::ZERO) + up * (BATTERY_HEIGHT + CONSTRUCT_SIZE * 1.4) + forward * punch;
+            let model = oriented(pos, up, forward) * Mat4::scale(Vec3::splat(CONSTRUCT_SIZE * (0.3 + 0.7 * grow)));
+            r.draw_mesh_additive(&self.fist[0], &model, Arc::new(ConstructShader { fade: grow, up }));
+        }
     }
 }
 
@@ -294,6 +318,22 @@ impl FragmentShader for OaPropShader {
 }
 
 /// Aura de la batería: brilla al centro y se desvanece en la orilla; pulsa con el núcleo.
+/// Constructo de luz: bordes brillantes (fresnel), relleno tenue y franjas que suben, como
+/// un holograma verde.
+struct ConstructShader {
+    fade: f32,
+    up: Vec3,
+}
+
+impl FragmentShader for ConstructShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let v = (u.camera_pos - f.world_pos).normalized();
+        let edge = (1.0 - f.normal.dot(v).abs()).powf(2.0);
+        let scan = 0.5 + 0.5 * (f.world_pos.dot(self.up) * 12.0 - u.time * 6.0).sin();
+        OA_GREEN * ((0.12 + 0.9 * edge + 0.15 * scan) * self.fade)
+    }
+}
+
 struct BatteryAuraShader;
 
 impl FragmentShader for BatteryAuraShader {
