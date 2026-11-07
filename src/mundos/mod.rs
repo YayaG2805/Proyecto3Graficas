@@ -14,6 +14,7 @@ pub mod sol;
 pub mod themyscira;
 pub mod krypton;
 pub mod gotham;
+pub mod atlantis;
 
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, Vertex};
@@ -28,6 +29,7 @@ pub struct Mundos {
     themyscira: Option<themyscira::Themyscira>,
     krypton: Option<krypton::Krypton>,
     gotham: Option<gotham::Gotham>,
+    atlantis: Option<atlantis::Atlantis>,
 }
 
 impl Mundos {
@@ -38,6 +40,7 @@ impl Mundos {
             themyscira: themyscira::Themyscira::new(scene),
             krypton: krypton::Krypton::new(scene),
             gotham: gotham::Gotham::new(scene),
+            atlantis: atlantis::Atlantis::new(scene),
         }
     }
 
@@ -50,6 +53,9 @@ impl Mundos {
             w.draw(r, scene, t);
         }
         if let Some(w) = &self.gotham {
+            w.draw(r, scene, t);
+        }
+        if let Some(w) = &self.atlantis {
             w.draw(r, scene, t);
         }
     }
@@ -69,6 +75,10 @@ impl Mundos {
             let (p, up) = w.landmark(scene, t);
             list.push(("torre_wayne", p, up, 2.4));
         }
+        if let Some(w) = &self.atlantis {
+            let (p, up) = w.landmark(scene, t);
+            list.push(("ciudad_atlantis", p, up, 1.8));
+        }
         list
     }
 
@@ -85,6 +95,9 @@ impl Mundos {
             w.draw_glow(r, scene, t);
         }
         if let Some(w) = &self.gotham {
+            w.draw_glow(r, scene, t);
+        }
+        if let Some(w) = &self.atlantis {
             w.draw_glow(r, scene, t);
         }
     }
