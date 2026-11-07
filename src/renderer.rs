@@ -149,6 +149,14 @@ pub struct Renderer {
     /// Luz que se SUMA encima de la imagen (objetos aditivos, como la llama del turbo).
     glow: Vec<Vec3>,
     shaders: Vec<Arc<dyn FragmentShader>>,
+    /// OPTIMIZACIÓN: los fragmentos ADITIVOS no se sombrean al rasterizar (eso corría en un
+    /// solo núcleo); se guardan aquí (píxel, shader, fragmento) y se sombrean todos juntos en
+    /// paralelo en `finish_frame`. Como la luz se SUMA, el orden no importa.
+    additive_shaders: Vec<Arc<dyn FragmentShader>>,
+    additive_frags: Vec<(u32, u16, Fragment)>,
+    /// Memoria reutilizada de un cuadro a otro (así no se pide memoria nueva en cada dibujo).
+    additive_colors: Vec<Vec3>,
+    scratch_verts: Vec<ClipVertex>,
     pub uniforms: Uniforms,
     pub stats: Stats,
     /// Se pueden apagar para comparar (teclas en main).
@@ -167,6 +175,10 @@ impl Renderer {
             gbuffer: vec![GPixel::default(); width * height],
             glow: vec![Vec3::ZERO; width * height],
             shaders: Vec::new(),
+            additive_shaders: Vec::new(),
+            additive_frags: Vec::new(),
+            additive_colors: Vec::new(),
+            scratch_verts: Vec::new(),
             uniforms,
             stats: Stats::default(),
             frustum_culling: true,
@@ -179,8 +191,17 @@ impl Renderer {
         self.uniforms = uniforms;
         self.stats = Stats::default();
         self.shaders.clear();
-        self.gbuffer.fill(GPixel::default());
-        self.glow.fill(Vec3::ZERO);
+        self.additive_shaders.clear();
+        self.additive_frags.clear();
+        // OPTIMIZACIÓN: limpiar en paralelo y solo lo necesario. Del G-buffer basta borrar la
+        // profundidad y el dueño del píxel (draw = 0 → vacío): el fragmento solo se lee si
+        // alguien escribió encima, y en ese caso ya trae datos nuevos. Así se escriben 8 bytes
+        // por píxel en vez de ~70.
+        self.gbuffer.par_iter_mut().for_each(|g| {
+            g.inv_w = 0.0;
+            g.draw = 0;
+        });
+        self.glow.par_iter_mut().for_each(|g| *g = Vec3::ZERO);
     }
 
     /// ¿La esfera (centro en mundo, radio) toca el volumen de visión? (culling)
@@ -252,35 +273,33 @@ impl Renderer {
         self.stats.objects_drawn += 1;
         self.stats.triangles_in += mesh.triangle_count() as u32;
 
-        // Los objetos aditivos no ocupan píxeles del G-buffer, así que no necesitan draw_id.
-        let (draw_id, additive_shader) = if additive {
-            (0, Some(shader))
-        } else {
-            if self.shaders.len() >= u16::MAX as usize - 1 {
-                return false;
-            }
-            self.shaders.push(shader);
-            (self.shaders.len() as u16, None) // 0 = vacío, así que el primero es 1
-        };
+        // Cada draw call guarda su shader en su lista (opacos o aditivos); draw_id = posición + 1
+        // (0 = vacío).
+        let list = if additive { &mut self.additive_shaders } else { &mut self.shaders };
+        if list.len() >= u16::MAX as usize - 1 {
+            return false;
+        }
+        list.push(shader);
+        let draw_id = list.len() as u16;
 
         // --- 2. Etapa de vértices ---
+        // (Se reutiliza el mismo Vec en cada dibujo: std::mem::take lo "presta" y al final se
+        // devuelve, así no se pide memoria nueva por cada uno de los ~1500 asteroides.)
         let mvp = self.uniforms.projection * self.uniforms.view * *model;
-        let verts: Vec<ClipVertex> = mesh
-            .vertices
-            .iter()
-            .map(|v| {
-                let p = v.position;
-                ClipVertex {
-                    clip: mvp.transform_vec4(Vec4::new(p.x, p.y, p.z, 1.0)),
-                    world: model.transform_point(p),
-                    normal: model.transform_dir(v.normal).normalized(),
-                    local: p,
-                    uv: v.uv,
-                    // La tangente es una dirección, igual que la normal: gira con el objeto.
-                    tangent: model.transform_dir(v.tangent),
-                }
-            })
-            .collect();
+        let mut verts = std::mem::take(&mut self.scratch_verts);
+        verts.clear();
+        verts.extend(mesh.vertices.iter().map(|v| {
+            let p = v.position;
+            ClipVertex {
+                clip: mvp.transform_vec4(Vec4::new(p.x, p.y, p.z, 1.0)),
+                world: model.transform_point(p),
+                normal: model.transform_dir(v.normal).normalized(),
+                local: p,
+                uv: v.uv,
+                // La tangente es una dirección, igual que la normal: gira con el objeto.
+                tangent: model.transform_dir(v.tangent),
+            }
+        }));
 
         // --- 3. Ensamblado de triángulos ---
         for tri in mesh.indices.chunks_exact(3) {
@@ -291,9 +310,10 @@ impl Renderer {
             // Recorte contra el plano cercano: z + w >= 0 (si no, se dibuja "detrás" de la cámara).
             let polygon = clip_near(&[a, b, c]);
             for i in 1..polygon.len().saturating_sub(1) {
-                self.raster_triangle(&polygon[0], &polygon[i], &polygon[i + 1], draw_id, additive_shader.as_deref());
+                self.raster_triangle(&polygon[0], &polygon[i], &polygon[i + 1], draw_id, additive);
             }
         }
+        self.scratch_verts = verts;
         true
     }
 
@@ -389,15 +409,9 @@ impl Renderer {
     }
 
     /// --- 4 a 7: pantalla, back-face, rasterizado y z-buffer ---
-    /// `additive`: si viene un shader, el triángulo es aditivo (ver `draw_mesh_additive`).
-    fn raster_triangle(
-        &mut self,
-        a: &ClipVertex,
-        b: &ClipVertex,
-        c: &ClipVertex,
-        draw_id: u16,
-        additive: Option<&dyn FragmentShader>,
-    ) {
+    /// `additive`: el triángulo es aditivo (ver `draw_mesh_additive`) y `draw_id` es su shader
+    /// en `additive_shaders`.
+    fn raster_triangle(&mut self, a: &ClipVertex, b: &ClipVertex, c: &ClipVertex, draw_id: u16, additive: bool) {
         let (w, h) = (self.width as f32, self.height as f32);
 
         // División de perspectiva y viewport.
@@ -461,11 +475,9 @@ impl Renderer {
                     uv: ((ua.0 * b0 + ub.0 * b1 + uc.0 * b2) * wcorr, (ua.1 * b0 + ub.1 * b1 + uc.1 * b2) * wcorr),
                     tangent: (ta * b0 + tb * b1 + tc * b2) * wcorr,
                 };
-                if let Some(shader) = additive {
-                    // Aditivo: sombrear ya y sumar la luz; el z-buffer no cambia.
-                    let mut f = frag;
-                    f.normal = f.normal.normalized();
-                    self.glow[row + px] += shader.shade(&f, &self.uniforms);
+                if additive {
+                    // Aditivo: se anota para sombrearlo después (en paralelo); el z-buffer no cambia.
+                    self.additive_frags.push(((row + px) as u32, draw_id, frag));
                     continue;
                 }
                 gp.inv_w = inv_w;
@@ -478,6 +490,19 @@ impl Renderer {
     /// --- 8. Etapa de fragmentos (en paralelo por filas) ---
     pub fn finish_frame(&mut self, sky: &(dyn Fn(Vec3, &Uniforms) -> Vec3 + Sync)) {
         let u = self.uniforms;
+
+        // --- 8a. Fragmentos aditivos: se sombrean en paralelo (cada uno es independiente) y
+        // luego se suman a `glow` en orden (sumar es barato; sombrear es lo caro).
+        let add_shaders = &self.additive_shaders;
+        self.additive_colors.resize(self.additive_frags.len(), Vec3::ZERO);
+        self.additive_colors.par_iter_mut().zip(self.additive_frags.par_iter()).for_each(|(out, (_, id, frag))| {
+            let mut f = *frag;
+            f.normal = f.normal.normalized();
+            *out = add_shaders[*id as usize - 1].shade(&f, &u);
+        });
+        for ((px, _, _), c) in self.additive_frags.iter().zip(&self.additive_colors) {
+            self.glow[*px as usize] += *c;
+        }
         let (w, h) = (self.width, self.height);
         let shaders = &self.shaders;
         let gbuffer = &self.gbuffer;
