@@ -449,18 +449,34 @@ impl Renderer {
         let (ua, ub, uc) = ((a.uv.0 * iw0, a.uv.1 * iw0), (b.uv.0 * iw1, b.uv.1 * iw1), (c.uv.0 * iw2, c.uv.1 * iw2));
         let (ta, tb, tc) = (a.tangent * iw0, b.tangent * iw1, c.tangent * iw2);
 
+        // OPTIMIZACIÓN: las funciones de arista son LINEALES en x, así que en vez de calcularlas
+        // desde cero en cada píxel (varias multiplicaciones) se calculan al inicio de la fila y
+        // luego solo se les SUMA un paso fijo por píxel.
+        let step0 = (y1 - y2) * inv_area; // cuánto cambia b0 al avanzar un píxel en x
+        let step1 = (y2 - y0) * inv_area; // cuánto cambia b1
         for py in min_y..=max_y as usize {
             let fy = py as f32 + 0.5;
             let row = py * self.width;
+            let fx0 = min_x as f32 + 0.5;
+            // Coordenadas baricéntricas (funciones de arista) en el primer píxel de la fila.
+            let mut b0 = ((x1 - fx0) * (y2 - fy) - (y1 - fy) * (x2 - fx0)) * inv_area;
+            let mut b1 = ((x2 - fx0) * (y0 - fy) - (y2 - fy) * (x0 - fx0)) * inv_area;
+            let mut inside_row = false;
             for px in min_x..=max_x as usize {
-                let fx = px as f32 + 0.5;
-                // Coordenadas baricéntricas (funciones de arista).
-                let b0 = ((x1 - fx) * (y2 - fy) - (y1 - fy) * (x2 - fx)) * inv_area;
-                let b1 = ((x2 - fx) * (y0 - fy) - (y2 - fy) * (x0 - fx)) * inv_area;
-                let b2 = 1.0 - b0 - b1;
-                if b0 < 0.0 || b1 < 0.0 || b2 < 0.0 {
+                let (c0, c1) = (b0, b1);
+                b0 += step0;
+                b1 += step1;
+                let b2 = 1.0 - c0 - c1;
+                if c0 < 0.0 || c1 < 0.0 || b2 < 0.0 {
+                    // El triángulo es convexo: si ya entramos a él en esta fila y salimos, el
+                    // resto de la fila queda afuera → pasar a la siguiente fila.
+                    if inside_row {
+                        break;
+                    }
                     continue;
                 }
+                inside_row = true;
+                let (b0, b1) = (c0, c1);
                 // 1/w sí es lineal en pantalla → sirve como profundidad.
                 let inv_w = b0 * iw0 + b1 * iw1 + b2 * iw2;
                 let gp = &mut self.gbuffer[row + px];
