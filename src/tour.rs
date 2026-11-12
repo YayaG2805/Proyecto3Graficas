@@ -6,7 +6,8 @@
 //! warp, órbita y colisiones que el jugador. Las fases se repiten mundo tras mundo:
 //!
 //!   1. VUELO ESPACIAL:  vuela unos segundos de lado respecto al Sol, subiendo un poco.
-//!   2. VIAJE:           elige el siguiente mundo (1-5) y aprieta Tab (warp).
+//!   2. VIAJE:           elige el siguiente mundo (1-5, y 6 si ya apareció Apokolips) y
+//!      aprieta Tab (warp).
 //!   3. ACERCAMIENTO:    al llegar aprieta F para engancharse a la órbita; si quedó lejos,
 //!      primero se acerca volando.
 //!   4. VUELTA:          escanea (E), baja pegado a la superficie y da una vuelta completa.
@@ -39,8 +40,6 @@ const DEPART_CLIMB_TIME: f32 = 1.2;
 /// Qué tan fuerte corrige el rumbo al acercarse (más alto = gira más brusco).
 const STEER_GAIN: f32 = 3.0;
 
-/// Los mundos que visita, en orden (las teclas 1-5).
-const WORLDS: [usize; 5] = [1, 2, 3, 4, 5];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
@@ -55,7 +54,8 @@ pub struct Tour {
     pub phase: Phase,
     /// Segundos en la fase actual.
     timer: f32,
-    /// Lugar en `WORLDS` del mundo que va a visitar.
+    /// Número del mundo que va a visitar, contando desde 0 (en `Scene::worlds`, las teclas
+    /// 1-6). Si aparece Apokolips, el tour también lo visita.
     next: usize,
     /// Cuánto ha girado alrededor del mundo en esta vuelta (radianes) y desde dónde.
     lap: f32,
@@ -72,13 +72,15 @@ fn steer(ship: &Ship, dir: Vec3) -> (f32, f32) {
 
 impl Tour {
     /// Empieza el tour; el primer mundo es el destino que ya estaba elegido.
-    pub fn new(first_world: usize) -> Tour {
-        let next = WORLDS.iter().position(|&w| w == first_world).unwrap_or(0);
+    pub fn new(scene: &Scene, first_world: usize) -> Tour {
+        let next = scene.worlds().iter().position(|&w| w == first_world).unwrap_or(0);
         Tour { phase: Phase::Cruise, timer: 0.0, next, lap: 0.0, last_dir: None, laps_done: 0 }
     }
 
-    pub fn world(&self) -> usize {
-        WORLDS[self.next]
+    /// Índice (en `scene.bodies`) del mundo que va a visitar.
+    pub fn world(&self, scene: &Scene) -> usize {
+        let worlds = scene.worlds();
+        worlds[self.next % worlds.len()]
     }
 
     fn go(&mut self, phase: Phase) {
@@ -88,7 +90,7 @@ impl Tour {
 
     /// Para el HUD: qué está haciendo el tour.
     pub fn describe(&self, scene: &Scene) -> String {
-        let name = scene.bodies.get(self.world()).map_or("?", |b| b.name);
+        let name = scene.bodies[self.world(scene)].name;
         match self.phase {
             Phase::Cruise => "vuelo espacial".to_string(),
             Phase::Travel => format!("viaje a {name}"),
@@ -102,7 +104,7 @@ impl Tour {
     pub fn drive(&mut self, ship: &Ship, state: &GameState, scene: &Scene, t: f32, dt: f32) -> ShipInput {
         let first_frame = self.timer == 0.0;
         self.timer += dt;
-        let world = self.world();
+        let world = self.world(scene);
         let center = scene.body_position(world, t);
         let radius = scene.bodies[world].radius;
         let mut input = ShipInput::default();
@@ -129,7 +131,7 @@ impl Tour {
             Phase::Travel => {
                 if first_frame {
                     // el destino se elige antes que el warp en el mismo cuadro (ver interaction.rs)
-                    input.select = Some(world);
+                    input.select = Some(self.next % scene.worlds().len() + 1); // la tecla de ese mundo
                     input.warp = true;
                 } else if !ship.warping() {
                     // llegó (o ya estaba tan cerca que el warp no arrancó)
@@ -186,7 +188,7 @@ impl Tour {
                     }
                 }
                 if self.timer >= DEPART_TIME {
-                    self.next = (self.next + 1) % WORLDS.len();
+                    self.next = (self.next % scene.worlds().len() + 1) % scene.worlds().len();
                     self.go(Phase::Cruise);
                 }
             }

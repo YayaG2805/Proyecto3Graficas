@@ -208,7 +208,7 @@ pub struct ShipInput {
     pub orbit_toggle: bool,    // F
     pub scan: bool,            // E
     pub warp: bool,            // Tab
-    pub select: Option<usize>, // teclas 1 a 5, 1 = bodies[1]
+    pub select: Option<usize>, // teclas 1 a 6: el numero de mundo (ver Scene::worlds)
     pub photo: bool,           // P
     pub gravity_toggle: bool,  // G
 }

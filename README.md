@@ -10,7 +10,7 @@ raylib solo se usa para abrir la ventana, leer el teclado, mostrar el framebuffe
 
 | Integrante | Contribución |
 |------------|--------------|
-| Diego Sandoval | Modelo del Halcón Milenario en Blender; planetas Themyscira, Krypton, Gotham, Atlantis y Oa (superficies y shaders); objetos de superficie (árboles, cristales, edificios, corales) y su distribución procedural; pantalla completa; sonido; aviso de calor y explosión al chocar con el Sol; tour automático y pantalla de inicio |
+| Diego Sandoval | Modelo del Halcón Milenario en Blender; planetas Themyscira, Krypton, Gotham, Atlantis y Oa (superficies y shaders); objetos de superficie (árboles, cristales, edificios, corales) y su distribución procedural; pantalla completa; sonido; aviso de calor y explosión al chocar con el Sol; tour automático y pantalla de inicio; Apokolips (planeta, Boom Tube, Darkseid y su nave) |
 | Diego Guevara | Base del motor (pipeline de render, sol, planeta y nave); órbitas visibles; mapeo de normales; cielo con nebulosa y agujero negro; efecto visual del warp; HUD con ficha y radar; luna Central City; cinturón de asteroides y cometa; personajes de la Liga; monumentos y detalles de cada mundo; optimizaciones del renderer |
 | Adrián López | Giro progresivo; gravedad de los planetas; modo órbita; viaje warp; estado del juego y teclas (escaneo, destino, modo foto); cristales coleccionables; niveles de detalle (`draw_lods`); paneles y motores del shader del Halcón |
 
@@ -42,7 +42,7 @@ cinturón de asteroides con culling y LOD prendidos y apagados.
 cargo test --release
 ```
 
-Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, explosión, sonidos, etc.
+Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, explosión, Apokolips, sonidos, etc.
 
 ## Controles
 
@@ -57,8 +57,9 @@ Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, explosión, sonid
 | Espacio | Freno fuerte |
 | F | Engancharse a la órbita del mundo cercano / soltarla |
 | E | Escanear el mundo cercano (muestra su ficha) |
-| 1 – 5 | Elegir destino: Themyscira, Krypton, Gotham, Atlantis, Oa |
+| 1 – 5 | Elegir destino: Themyscira, Krypton, Gotham, Atlantis, Oa (6: Apokolips, cuando aparece) |
 | Tab | Warp al destino (otro Tab lo cancela) |
+| K | Abrir el Boom Tube de Apokolips sin juntar los cristales (atajo para la demo) |
 | G | Prender / apagar la gravedad |
 | P | Modo foto (congela todo; la cámara sigue) |
 | C | Prender / apagar el culling por frustum |
@@ -80,6 +81,8 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 3. Con **C** y **L** se ve en el HUD cómo cambian los objetos y triángulos procesados.
 4. Si la nave se acerca demasiado al Sol aparece el aviso de calor; si lo toca, explota y
    reaparece junto al mundo elegido.
+5. Al juntar los 10 cristales (o con **K**) se abre un Boom Tube y aparece **Apokolips**, el
+   mundo de Darkseid: se viaja con **6** y se rodea y escanea como los demás.
 
 ## Características del menú que solicitamos evaluar
 
@@ -156,6 +159,10 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
   `assets/sonidos/generar_sonidos.py` (Python + numpy).
 - Aviso de calor y explosión al chocar con el Sol (`src/explosion.rs`).
 - Pantalla de inicio y tour automático (`src/tour.rs`).
+- Premio de los cristales: **Apokolips** (`src/apokolips.rs`). Un portal (Boom Tube) se abre y
+  el planeta crece desde su centro. Tiene corteza de celdas Voronoi con fosos de fuego y grietas
+  de lava animadas, deformación con ruido, a **Darkseid** de pie con los ojos encendidos y su
+  nave de guerra en órbita (modelos en `assets/props/modelar_apokolips.py`).
 
 ## Estructura del código
 
@@ -174,6 +181,7 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 | `src/exotics.rs` | Cinturón de asteroides y cometa |
 | `src/explosion.rs` | Explosión de la nave y reaparición |
 | `src/tour.rs` | Tour automático |
+| `src/apokolips.rs` | Apokolips, el Boom Tube, Darkseid y su nave |
 | `src/audio.rs` | Sonido |
 | `src/hud.rs` | Radar, ficha y tintes de pantalla dibujados en el framebuffer |
 | `src/noise.rs`, `src/normal_map.rs`, `src/texture.rs` | Ruido procedural, mapa de normales y texturas |

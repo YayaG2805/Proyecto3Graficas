@@ -19,28 +19,30 @@ const ATMOS_NIGHT: f32 = 0.12;
 
 /// (mundo, color, tamaño de la esfera en radios del planeta, fuerza).
 /// El tamaño debe pasar las montañas más altas (Krypton sube hasta ~8 %).
-const ATMOSPHERES: [(&str, Vec3, f32, f32); 5] = [
+const ATMOSPHERES: [(&str, Vec3, f32, f32); 6] = [
     ("Themyscira", Vec3::new(0.35, 0.60, 1.00), 1.12, 0.9),
     ("Krypton", Vec3::new(1.00, 0.35, 0.25), 1.14, 0.8),
     ("Gotham", Vec3::new(0.65, 0.45, 0.30), 1.08, 0.6),
     ("Atlantis", Vec3::new(0.20, 0.75, 1.00), 1.08, 0.9),
     ("Oa", Vec3::new(0.20, 1.00, 0.40), 1.10, 0.5),
+    // humo y fuego de Apokolips (solo se ve cuando ya apareció)
+    ("Apokolips", Vec3::new(1.00, 0.30, 0.08), 1.10, 0.9),
 ];
 
 pub struct Atmosferas {
     shell: Mesh,
-    /// (índice del mundo, color, tamaño, fuerza)
-    list: Vec<(usize, Vec3, f32, f32)>,
 }
 
 impl Atmosferas {
-    pub fn new(scene: &Scene) -> Atmosferas {
-        let list = ATMOSPHERES.iter().filter_map(|&(name, c, s, k)| body(scene, name).map(|i| (i, c, s, k))).collect();
-        Atmosferas { shell: Mesh::icosphere(3, &|_| 1.0), list }
+    pub fn new(_scene: &Scene) -> Atmosferas {
+        Atmosferas { shell: Mesh::icosphere(3, &|_| 1.0) }
     }
 
     pub fn draw_glow(&self, r: &mut Renderer, scene: &Scene, t: f32) {
-        for &(i, color, size, strength) in &self.list {
+        // el mundo se busca por nombre en cada cuadro: así también sale la de un mundo que
+        // aparece a medio juego (Apokolips)
+        let present = ATMOSPHERES.iter().filter_map(|&(name, c, s, k)| body(scene, name).map(|i| (i, c, s, k)));
+        for (i, color, size, strength) in present {
             let model = Mat4::translation(scene.body_position(i, t)) * Mat4::scale(Vec3::splat(scene.bodies[i].radius * size));
             r.draw_mesh_additive(&self.shell, &model, Arc::new(AtmosphereShader { color, strength }));
         }

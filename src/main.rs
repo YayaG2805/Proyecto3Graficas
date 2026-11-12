@@ -5,6 +5,7 @@
 //! También reproduce los .wav del sonido; qué suena y cuándo lo decide `audio.rs`.
 
 mod audio;
+mod apokolips;
 mod creatures;
 mod exotics;
 mod explosion;
@@ -102,6 +103,7 @@ fn body_color(name: &str) -> Vec3 {
         "Atlantis" => Vec3::new(0.15, 0.45, 1.0),
         "Oa" => Vec3::new(0.30, 1.0, 0.40),
         "Central City" => Vec3::new(1.0, 0.92, 0.30),
+        "Apokolips" => Vec3::new(1.0, 0.3, 0.1),
         _ => Vec3::new(0.9, 0.9, 0.9),
     }
 }
@@ -150,6 +152,8 @@ struct Game {
     explosion_assets: ExplosionAssets,
     /// Tour automático (tecla T): mientras exista, él decide las teclas de vuelo.
     tour: Option<tour::Tour>,
+    /// Apokolips, el mundo de Darkseid: aparece al juntar los 10 cristales (o con K).
+    apokolips: apokolips::Apokolips,
     /// Pantalla de inicio: la cámara gira alrededor del sistema hasta que se aprieta Enter.
     title: bool,
 }
@@ -223,6 +227,7 @@ impl Game {
             explosion: None,
             explosion_assets,
             tour: None,
+            apokolips: apokolips::Apokolips::new(),
             title: false,
         }
     }
@@ -262,6 +267,10 @@ impl Game {
             return ShipInput::default();
         }
 
+        // Apokolips sigue apareciendo aunque la nave esté explotando (en modo foto se congela)
+        let world_dt = if self.state.photo_mode { 0.0 } else { dt };
+        self.apokolips.update(&mut self.scene, world_dt);
+
         // el tour decide las teclas, salvo que el jugador apriete alguna de vuelo
         let input = self.drive_tour(input, dt);
 
@@ -283,6 +292,11 @@ impl Game {
 
         // paso 3: el efecto del warp ahora lo decide el estado del juego
         self.warp = self.state.warp;
+
+        // paso 3a: el premio de los cristales: con los 10 se abre el Boom Tube de Apokolips
+        if self.state.total > 0 && self.state.collected >= self.state.total {
+            self.unlock_apokolips();
+        }
 
         // paso 3b: la ficha del planeta escaneado se cierra sola a los SCAN_CARD_SECONDS
         // o si la nave se aleja. Usa dt real, así también corre en modo foto.
@@ -332,11 +346,17 @@ impl Game {
         }
     }
 
+    /// Abre el Boom Tube y aparece Apokolips (premio de los cristales, o tecla K en la demo).
+    /// Si ya había aparecido no hace nada.
+    fn unlock_apokolips(&mut self) {
+        self.apokolips.unlock(&mut self.scene, self.ship.position, self.time);
+    }
+
     /// Tecla T: empieza el tour (desde el destino elegido) o lo termina.
     fn toggle_tour(&mut self) {
         self.tour = match self.tour {
             Some(_) => None,
-            None if self.explosion.is_none() => Some(tour::Tour::new(self.state.warp_target)),
+            None if self.explosion.is_none() => Some(tour::Tour::new(&self.scene, self.state.warp_target)),
             None => None,
         };
     }
@@ -487,6 +507,7 @@ impl Game {
             oa.draw(&mut self.renderer, &self.scene, self.time);
         }
         self.mundos.draw(&mut self.renderer, &self.scene, self.time);
+        self.apokolips.draw(&mut self.renderer, &self.scene, self.time);
         let model = self.ship.model_matrix(1.0);
         if let Some(e) = &self.explosion {
             // la nave ya no está: en su lugar van los pedazos
@@ -509,6 +530,7 @@ impl Game {
             oa.draw_glow(&mut self.renderer, &self.scene, self.time);
         }
         self.mundos.draw_glow(&mut self.renderer, &self.scene, self.time);
+        self.apokolips.draw_glow(&mut self.renderer, &self.scene, self.time);
         if let Some(e) = &self.explosion {
             e.draw_glow(&mut self.renderer, &self.explosion_assets);
         }
@@ -755,6 +777,47 @@ fn snapshot() {
         println!("snap_calor.ppm y snap_explosion*.ppm: listo");
     }
 
+    // Apokolips: el Boom Tube a medio abrir, el planeta, Darkseid y su nave.
+    let ship_before = (g.ship.position, g.time);
+    g.time = 0.0;
+    g.ship.position = Vec3::new(0.0, 25.0, 150.0);
+    g.unlock_apokolips();
+    if let Some(i) = g.apokolips.index() {
+        let world = g.scene.body_position(i, g.time);
+        // el portal a los 2.5 s: ya está abierto y el planeta va creciendo
+        g.apokolips.update(&mut g.scene, 2.5);
+        aim_ship_at(&mut g, world + Vec3::new(0.0, 8.0, 40.0), world);
+        g.render();
+        g.renderer.save_ppm("snap_boom_tube.ppm").expect("no se pudo guardar");
+        g.apokolips.finish(&mut g.scene);
+        let to_sun = (-world).normalized();
+        let r = g.scene.bodies[i].radius;
+        aim_ship_at(&mut g, world + (to_sun * 2.6 + Vec3::UP * 0.8) * r, world);
+        g.render();
+        g.renderer.save_ppm("snap_mundo_apokolips.ppm").expect("no se pudo guardar");
+        if let Some((feet, up)) = g.apokolips.darkseid_spot(&g.scene, g.time) {
+            let across = up.cross(if up.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) }).normalized();
+            let target = feet + up * 1.4;
+            g.camera.position = target + across * 4.5 + up * 1.2;
+            g.camera.target = target;
+            g.camera.up = up;
+            g.ship.position = g.camera.position + up * 40.0;
+            g.render();
+            g.renderer.save_ppm("snap_darkseid.ppm").expect("no se pudo guardar");
+        }
+        if let Some(m) = g.apokolips.ship_model(&g.scene, g.time) {
+            let pos = m.transform_point(Vec3::ZERO);
+            g.camera.position = pos + Vec3::new(4.0, 2.0, 5.0);
+            g.camera.target = pos;
+            g.camera.up = Vec3::UP;
+            g.ship.position = g.camera.position + Vec3::UP * 40.0;
+            g.render();
+            g.renderer.save_ppm("snap_nave_apokolips.ppm").expect("no se pudo guardar");
+        }
+        println!("snap_boom_tube, mundo_apokolips, darkseid y nave_apokolips: listo");
+    }
+    (g.ship.position, g.time) = ship_before;
+
     // Pantalla de inicio (sin los textos, que los escribe raylib en la ventana).
     g.title = true;
     g.update(ShipInput::default(), 0.0);
@@ -838,7 +901,7 @@ fn read_input(rl: &RaylibHandle) -> ShipInput {
     }
 }
 
-// revisa las teclas 1 a 5 y devuelve el numero de la q se acaba de apretar
+// revisa las teclas 1 a 6 y devuelve el numero de la q se acaba de apretar
 fn read_world_key(rl: &RaylibHandle) -> Option<usize> {
     let keys = [
         KeyboardKey::KEY_ONE,
@@ -846,6 +909,7 @@ fn read_world_key(rl: &RaylibHandle) -> Option<usize> {
         KeyboardKey::KEY_THREE,
         KeyboardKey::KEY_FOUR,
         KeyboardKey::KEY_FIVE,
+        KeyboardKey::KEY_SIX,
     ];
     // la tecla 1 esta en la posicion 0 de la lista, por eso el + 1
     keys.iter().position(|&key| rl.is_key_pressed(key)).map(|i| i + 1)
@@ -934,7 +998,10 @@ fn main() {
                     s.tocar(audio::Efecto::Destino);
                 }
             }
-        } else if tour_key {
+        } else if rl.is_key_pressed(KeyboardKey::KEY_K) {
+            game.unlock_apokolips(); // atajo para la demo: abre el Boom Tube sin juntar los cristales
+        }
+        if !game.title && tour_key {
             game.toggle_tour();
             if let Some(s) = &sonidos {
                 s.tocar(audio::Efecto::Interruptor);
@@ -972,7 +1039,7 @@ fn main() {
                 draw_centered!(d, "un recorrido por los mundos de la Liga", y - 128, 26, Color::GOLD);
                 draw_centered!(d, "Renderer por software  -  Graficas por Computadora 2026", y - 92, 20, Color::LIGHTGRAY);
                 draw_centered!(d, "W/S acelerar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar", y - 20, 18, Color::SKYBLUE);
-                draw_centered!(d, "F orbita   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda", y + 6, 18, Color::SKYBLUE);
+                draw_centered!(d, "F orbita   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda   K portal", y + 6, 18, Color::SKYBLUE);
                 if (game.time * 3.0).sin() > -0.4 {
                     draw_centered!(d, "ENTER para empezar", y + 90, 34, Color::RAYWHITE);
                 }
@@ -1020,6 +1087,7 @@ fn main() {
                 // El destino del warp, si ya vamos viajando y los coleccionables
                 // (el total lo llena interaction.rs cuando haya cristales).
                 let target = game.scene.bodies[game.state.warp_target].name;
+                let worlds = game.scene.worlds().len();
                 let crystals = if game.state.total > 0 {
                     format!("{}/{}", game.state.collected, game.state.total)
                 } else {
@@ -1027,7 +1095,7 @@ fn main() {
                 };
                 d.draw_text(
                     &format!(
-                        "destino [1-5]: {target}   warp [Tab]: {}   cristales: {crystals}",
+                        "destino [1-{worlds}]: {target}   warp [Tab]: {}   cristales: {crystals}",
                         if game.ship.warping() { "viajando" } else { "listo" }
                     ),
                     10,
@@ -1050,12 +1118,23 @@ fn main() {
                     let world = hud::to_ascii(game.scene.bodies[game.state.warp_target].name);
                     draw_centered!(d, "NAVE DESTRUIDA", WINDOW_H / 2 - 80, 48, Color::new(255, 90, 40, 255));
                     draw_centered!(d, &format!("reapareciendo en {left} s junto a {world}"), WINDOW_H / 2 - 22, 22, Color::RAYWHITE);
-                    draw_centered!(d, "[1-5] elegir otro mundo", WINDOW_H / 2 + 8, 18, Color::GOLD);
+                    draw_centered!(d, &format!("[1-{}] elegir otro mundo", game.scene.worlds().len()), WINDOW_H / 2 + 8, 18, Color::GOLD);
                 } else if game.heat > HEAT_WARNING {
                     // cuando ya es peligroso el letrero parpadea
                     if game.heat < HEAT_DANGER || (game.time * 6.0).sin() > -0.3 {
                         draw_centered!(d, "ALERTA: CALOR EXTREMO", 130, 30, Color::new(255, 80, 30, 255));
                         draw_centered!(d, "alejate del Sol o la nave explota", 166, 20, Color::ORANGE);
+                    }
+                }
+
+                // Letrero del premio: se abrió el Boom Tube de Apokolips.
+                if let Some(age) = game.apokolips.age().filter(|&a| a < apokolips::MESSAGE_TIME) {
+                    if game.explosion.is_none() {
+                        let key = game.scene.worlds().len();
+                        draw_centered!(d, "SE ABRIO UN BOOM TUBE", 200, 34, Color::new(120, 190, 255, 255));
+                        if age > 1.0 {
+                            draw_centered!(d, &format!("Apokolips, el mundo de Darkseid, aparecio: tecla {key} para viajar"), 242, 20, Color::RAYWHITE);
+                        }
                     }
                 }
 
@@ -1083,26 +1162,20 @@ fn main() {
                 // Tour automático: qué está haciendo y cómo salir.
                 if let Some(t) = &game.tour {
                     let text = format!("TOUR AUTOMATICO: {}", hud::to_ascii(&t.describe(&game.scene)));
-                    draw_centered!(d, &text, WINDOW_H - 110, 24, Color::GOLD);
-                    draw_centered!(d, "cualquier tecla de vuelo o T para tomar el control", WINDOW_H - 80, 18, Color::LIGHTGRAY);
+                    draw_centered!(d, &text, WINDOW_H - 140, 24, Color::GOLD);
+                    draw_centered!(d, "cualquier tecla de vuelo o T para tomar el control", WINDOW_H - 110, 18, Color::LIGHTGRAY);
                 }
 
                 if show_help {
-                    // son dos lineas porque en una ya no cabia en la ventana
-                    d.draw_text(
-                        "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear",
-                        10,
-                        WINDOW_H - 48,
-                        16,
-                        Color::GOLD,
-                    );
-                    d.draw_text(
-                        "1-5 destino   Tab warp/cancelar   G gravedad   P foto   T tour   C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11",
-                        10,
-                        WINDOW_H - 26,
-                        16,
-                        Color::GOLD,
-                    );
+                    // son tres lineas porque en menos ya no cabia en la ventana
+                    let help = [
+                        "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear".to_string(),
+                        format!("1-{} destino   Tab warp/cancelar   G gravedad   P foto   T tour   K portal (demo)", game.scene.worlds().len()),
+                        "C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11 pantalla".to_string(),
+                    ];
+                    for (k, line) in help.iter().enumerate() {
+                        d.draw_text(line, 10, WINDOW_H - 70 + 22 * k as i32, 16, Color::GOLD);
+                    }
                 }
             }
         }
@@ -1358,6 +1431,76 @@ mod tests {
         g.start();
         assert!(!g.title);
         assert!((g.camera.position - g.ship.position).length() < 10.0, "la camara vuelve detras de la nave");
+    }
+
+    #[test]
+    fn con_los_diez_cristales_aparece_apokolips() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        let worlds = g.scene.worlds().len();
+        g.update(ShipInput::default(), dt);
+        assert!(g.apokolips.age().is_none(), "sin cristales no aparece");
+
+        // junto los 10 (lo de recogerlos ya lo prueba interaction.rs)
+        g.state.collected = g.state.total;
+        g.update(ShipInput::default(), dt);
+        let i = g.apokolips.index().expect("se abrio el Boom Tube");
+        assert_eq!(g.scene.bodies[i].name, "Apokolips");
+        assert_eq!(g.scene.worlds().len(), worlds + 1);
+
+        // a los 5 s ya tiene su tamaño y la tecla 6 lo elige como destino
+        for _ in 0..(apokolips::PORTAL_CLOSE / dt) as usize + 5 {
+            g.update(ShipInput::default(), dt);
+        }
+        assert_eq!(g.scene.bodies[i].radius, 5.0);
+        g.update(ShipInput { select: Some(6), ..Default::default() }, dt);
+        assert_eq!(g.state.warp_target, i);
+    }
+
+    #[test]
+    fn la_tecla_6_no_hace_nada_antes_del_portal_y_k_lo_abre_una_vez() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        let target = g.state.warp_target;
+        g.update(ShipInput { select: Some(6), ..Default::default() }, dt);
+        assert_eq!(g.state.warp_target, target, "la 6 todavia no es ningun mundo");
+
+        let bodies = g.scene.bodies.len();
+        g.unlock_apokolips();
+        g.unlock_apokolips();
+        assert_eq!(g.scene.bodies.len(), bodies + 1, "Apokolips aparece una sola vez");
+    }
+
+    #[test]
+    fn el_tour_tambien_visita_apokolips() {
+        let mut g = Game::new();
+        let dt = 1.0 / 30.0;
+        g.unlock_apokolips();
+        g.apokolips.finish(&mut g.scene);
+        let apokolips = g.apokolips.index().unwrap();
+        g.state.warp_target = apokolips;
+        g.toggle_tour();
+        let mut t = 0.0;
+        while t < 60.0 && g.state.orbit_lock != Some(apokolips) {
+            g.update(ShipInput::default(), dt);
+            assert!(g.explosion.is_none(), "el tour exploto en t = {t:.1}");
+            t += dt;
+        }
+        assert_eq!(g.state.orbit_lock, Some(apokolips), "se engancho a la orbita de Apokolips");
+    }
+
+    #[test]
+    fn en_modo_foto_el_portal_se_congela() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        g.unlock_apokolips();
+        g.update(ShipInput::default(), dt);
+        g.update(ShipInput { photo: true, ..Default::default() }, dt);
+        let age = g.apokolips.age().unwrap();
+        for _ in 0..60 {
+            g.update(ShipInput::default(), dt);
+        }
+        assert_eq!(g.apokolips.age().unwrap(), age);
     }
 
     #[test]

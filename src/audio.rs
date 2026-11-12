@@ -11,7 +11,9 @@
 //!
 //! Si no hay tarjeta de sonido o falta un archivo, el juego sigue igual, solo sin ese sonido.
 
+use crate::apokolips;
 use crate::math::Vec3;
+use crate::mundos::body;
 use crate::mundos::smoothstep;
 use crate::scene::{Scene, CENTRAL_CITY_SEED};
 use crate::shaders::central_city_bolt_started;
@@ -75,10 +77,11 @@ pub enum Efecto {
     Error,
     Rayo,
     Explosion,
+    BoomTube,
 }
 
 impl Efecto {
-    pub const TODOS: [Efecto; 16] = [
+    pub const TODOS: [Efecto; 17] = [
         Efecto::WarpCarga,
         Efecto::WarpSalto,
         Efecto::WarpLlegada,
@@ -95,6 +98,7 @@ impl Efecto {
         Efecto::Error,
         Efecto::Rayo,
         Efecto::Explosion,
+        Efecto::BoomTube,
     ];
 
     /// Nombre del archivo (sin .wav).
@@ -116,6 +120,7 @@ impl Efecto {
             Efecto::Error => "error",
             Efecto::Rayo => "rayo",
             Efecto::Explosion => "explosion",
+            Efecto::BoomTube => "boom_tube",
         }
     }
 
@@ -127,7 +132,7 @@ impl Efecto {
             Efecto::Destino => 0.5,
             Efecto::Foto => 0.9,
             Efecto::CristalesCompletos => 0.9,
-            Efecto::Explosion => 1.0,
+            Efecto::Explosion | Efecto::BoomTube => 1.0,
             _ => 0.7,
         }
     }
@@ -198,6 +203,7 @@ struct Antes {
     cristales: u32,
     tiempo: f32,
     explotando: bool,
+    portal: bool,
 }
 
 pub struct Sonidos<'a> {
@@ -208,8 +214,9 @@ pub struct Sonidos<'a> {
     turbo: Option<Music<'a>>,
     warp: Option<Music<'a>>,
     alarma: Option<Music<'a>>,
-    /// (índice del cuerpo, su loop de ambiente)
-    ambientes: Vec<(usize, Music<'a>)>,
+    /// (nombre del mundo, su loop de ambiente). Se busca por nombre en cada cuadro: así también
+    /// suena el de un mundo que aparece a medio juego (Apokolips).
+    ambientes: Vec<(&'static str, Music<'a>)>,
     /// Un lugar por cada `Efecto`, en el orden de `Efecto::TODOS`.
     efectos: Vec<Option<Sound<'a>>>,
     /// Índice de Central City, para que sus rayos truenen.
@@ -224,8 +231,9 @@ impl<'a> Sonidos<'a> {
         let ambientes = scene
             .bodies
             .iter()
-            .enumerate()
-            .filter_map(|(i, b)| cargar_loop(audio, &ambiente_de(b.name)).map(|m| (i, m)))
+            .map(|b| b.name)
+            .chain([apokolips::NAME])
+            .filter_map(|name| cargar_loop(audio, &ambiente_de(name)).map(|m| (name, m)))
             .collect();
         Sonidos {
             audio,
@@ -236,8 +244,8 @@ impl<'a> Sonidos<'a> {
             alarma,
             ambientes,
             efectos: Efecto::TODOS.iter().map(|&e| cargar_efecto(audio, e)).collect(),
-            luna_rayos: crate::mundos::body(scene, "Central City"),
-            antes: Antes { fase: None, orbita: None, cristales: 0, tiempo: 0.0, explotando: false },
+            luna_rayos: body(scene, "Central City"),
+            antes: Antes { fase: None, orbita: None, cristales: 0, tiempo: 0.0, explotando: false, portal: false },
             espera_choque: 0.0,
         }
     }
@@ -280,16 +288,26 @@ impl<'a> Sonidos<'a> {
         // --- 2. Ambientes: más fuerte entre más cerca, y del lado donde está el mundo ---
         let (derecha, _, _) = g.camera.basis();
         let mut vol_luna = 0.0;
-        for (i, m) in &self.ambientes {
-            let b = &g.scene.bodies[*i];
-            let centro = g.scene.body_position(*i, g.time);
+        for (name, m) in &self.ambientes {
+            let Some(i) = body(&g.scene, name) else {
+                ajustar(Some(m), 0.0, 1.0, 0.5); // ese mundo todavía no aparece
+                continue;
+            };
+            let b = &g.scene.bodies[i];
+            let centro = g.scene.body_position(i, g.time);
             let radios = ((centro - ship.position).length() - b.radius) / b.radius;
             let base = if b.orbit_radius == 0.0 { VOL_AMBIENTE_SOL } else { VOL_AMBIENTE };
             let vol = base * cercania(radios);
             ajustar(Some(m), vol, 1.0, paneo((centro - g.camera.position).normalized(), derecha));
-            if Some(*i) == self.luna_rayos {
+            if Some(i) == self.luna_rayos {
                 vol_luna = vol;
             }
+        }
+
+        // --- 3a. El Boom Tube de Apokolips se abre ---
+        let portal = g.apokolips.age().is_some();
+        if portal && !self.antes.portal {
+            self.tocar(Efecto::BoomTube);
         }
 
         // --- 3. La explosión: empieza (BUM) y termina (la nave reaparece) ---
@@ -363,7 +381,9 @@ impl<'a> Sonidos<'a> {
             self.tocar(if en_rango { Efecto::Escaneo } else { Efecto::Error });
         }
         if let Some(i) = input.select {
-            self.tocar(if st.warp_target == i { Efecto::Destino } else { Efecto::Error });
+            // la tecla n es el mundo número n (ver Scene::worlds)
+            let elegido = i.checked_sub(1).and_then(|k| g.scene.worlds().get(k).copied());
+            self.tocar(if elegido == Some(st.warp_target) { Efecto::Destino } else { Efecto::Error });
         }
         if input.photo {
             self.tocar(Efecto::Foto);
@@ -377,7 +397,7 @@ impl<'a> Sonidos<'a> {
             }
         }
 
-        self.antes = Antes { fase, orbita: st.orbit_lock, cristales: st.collected, tiempo: g.time, explotando };
+        self.antes = Antes { fase, orbita: st.orbit_lock, cristales: st.collected, tiempo: g.time, explotando, portal };
     }
 }
 
@@ -412,14 +432,14 @@ mod tests {
     #[test]
     fn estan_todos_los_wav() {
         let scene = Scene::new();
-        let ambientes = scene.bodies.iter().map(|b| ambiente_de(b.name));
+        let ambientes = scene.bodies.iter().map(|b| ambiente_de(b.name)).chain([ambiente_de(apokolips::NAME)]);
         let nombres: Vec<String> = LOOPS
             .iter()
             .map(|s| s.to_string())
             .chain(Efecto::TODOS.iter().map(|e| e.archivo().to_string()))
             .chain(ambientes)
             .collect();
-        assert_eq!(nombres.len(), LOOPS.len() + Efecto::TODOS.len() + scene.bodies.len());
+        assert_eq!(nombres.len(), LOOPS.len() + Efecto::TODOS.len() + scene.bodies.len() + 1);
         for n in &nombres {
             wav_valido(n).unwrap();
         }

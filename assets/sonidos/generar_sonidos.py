@@ -15,6 +15,7 @@ Si quieren otro sonido, basta con reemplazar el .wav (mismo nombre) por uno prop
 """
 
 import pathlib
+import sys
 import wave
 
 import numpy as np
@@ -23,6 +24,8 @@ SR = 44100
 SEMILLA = 2026
 CARPETA = pathlib.Path(__file__).resolve().parent
 rng = np.random.default_rng(SEMILLA)
+# Opcional: `python generar_sonidos.py boom_tube amb_apokolips` escribe solo esos.
+SOLO = set(sys.argv[1:])
 
 
 # ------------------------------------------------------------------------------------------
@@ -119,6 +122,10 @@ def chispa(dur):
 
 
 def guardar(nombre, x, pico=0.9, loop=False):
+    # Con nombres en la linea de comandos solo se escriben esos (los demas se calculan igual,
+    # asi la secuencia al azar no cambia). Sirve si el juego esta abierto usando los otros.
+    if SOLO and nombre not in SOLO:
+        return
     x = normal(x) * pico
     if not loop:
         x = bordes(x)
@@ -377,6 +384,38 @@ def explosion():
     return salida * np.minimum(t / 0.004, 1)
 
 
+def boom_tube():
+    # 3.5 s: el "BUM" grave del portal, un tunel de viento que sube, un acorde que vibra
+    # mientras esta abierto y al final el viento que baja cuando se cierra.
+    salida = np.zeros(int(3.5 * SR))
+    t = tiempo(3.5)
+    bum = barrido(1.5, 55, 28, (1.0, 0.4)) * np.exp(-tiempo(1.5) * 3)
+    poner(salida, normal(bum), 0.0)
+    poner(salida, normal(ruido_barrido(1.2, 200, 6000)) * np.linspace(0, 1, int(1.2 * SR)) * 0.6, 0.0)
+    vibrato = 1 + 0.004 * seno(6, t)
+    fase = 2 * np.pi * np.cumsum(vibrato) / SR
+    acorde = sum(np.sin(fase * f) for f in (220.0, 277.2, 329.6, 440.0))
+    abierto = np.clip((t - 0.3) / 0.4, 0, 1) * np.clip((3.3 - t) / 0.6, 0, 1)
+    salida += normal(acorde) * abierto * 0.35
+    poner(salida, normal(ruido_barrido(1.0, 5000, 150)) * np.linspace(1, 0, int(1.0 * SR)) * 0.5, 2.4)
+    return salida
+
+
+def amb_apokolips():
+    # 4 s: zumbido de fabricas, fuego que chisporrotea y tambores de guerra (uno por segundo).
+    t = tiempo(4.0)
+    n = len(t)
+    fabrica = normal(sum(a * seno(55 * k, t) for k, a in [(1, 1.0), (2, 0.5), (3, 0.4), (5, 0.15)])) * (0.75 + 0.25 * seno(0.5, t))
+    fuego = normal(filtro(ruido(n), 150, 2500)) * (0.7 + 0.3 * seno(1.25, t))
+    salida = fabrica * 0.45 + fuego * 0.35
+    golpe = barrido(0.35, 70, 38) * np.exp(-tiempo(0.35) * 9)
+    for k in range(4):
+        poner(salida, normal(golpe) * (0.9 if k % 2 == 0 else 0.6), float(k), envolver=True)
+    for _ in range(30):
+        poner(salida, normal(chispa(rng.uniform(0.004, 0.015))) * rng.uniform(0.08, 0.25), rng.uniform(0, 4), envolver=True)
+    return salida
+
+
 def rayo():
     # Descarga de Central City: chisporroteo que se corta a pedazos + un trueno chico.
     t = tiempo(0.7)
@@ -400,3 +439,5 @@ if __name__ == "__main__":
     # Los nuevos van al final: todos comparten la secuencia de numeros al azar, asi los de
     # arriba siguen saliendo identicos aunque se agreguen sonidos.
     guardar("explosion", explosion())
+    guardar("boom_tube", boom_tube())
+    guardar("amb_apokolips", amb_apokolips(), pico=0.7, loop=True)

@@ -399,6 +399,13 @@ impl Scene {
         }
     }
 
+    /// Los MUNDOS que se eligen con las teclas 1-6, en orden: los cuerpos que orbitan al Sol
+    /// (sin el Sol ni las lunas). La tecla n es `worlds()[n - 1]`; así un cuerpo nuevo al
+    /// final de la lista (Apokolips) es la tecla 6 aunque antes esté la luna Central City.
+    pub fn worlds(&self) -> Vec<usize> {
+        (0..self.bodies.len()).filter(|&i| self.bodies[i].parent.is_none() && self.bodies[i].orbit_radius > 0.0).collect()
+    }
+
     /// donde esta de verdad el cuerpo i en el mundo, siempre hay q usar esta
     pub fn body_position(&self, i: usize, t: f32) -> Vec3 {
         let b = &self.bodies[i];

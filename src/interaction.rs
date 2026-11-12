@@ -248,10 +248,10 @@ pub fn update(state: &mut GameState, ship: &mut Ship, scene: &Scene, input: &Shi
         }
     }
 
-    // paso 3: las teclas 1 a 5 cambian el destino
-    // si ese mundo no existe o es una luna la tecla no hace nada, asi las lunas no corren los numeros
-    if let Some(i) = input.select {
-        if i >= FIRST_WORLD && i < scene.bodies.len() && scene.bodies[i].parent.is_none() {
+    // paso 3: las teclas 1 a 6 cambian el destino
+    // la tecla n es el mundo numero n (sin el sol ni las lunas), si ese mundo no existe no hace nada
+    if let Some(n) = input.select {
+        if let Some(i) = n.checked_sub(1).and_then(|k| scene.worlds().get(k).copied()) {
             state.warp_target = i;
         }
     }
@@ -374,10 +374,13 @@ mod tests {
         update(&mut state, &mut ship, &scene, &select(99), 0.0, 0.016);
         assert_eq!(state.warp_target, 3);
 
-        // una luna tampoco
+        // las lunas no cuentan: si atlantis (4) fuera luna, la tecla 4 seria el siguiente mundo, oa (5)
         scene.bodies[4].parent = Some(3);
         update(&mut state, &mut ship, &scene, &select(4), 0.0, 0.016);
-        assert_eq!(state.warp_target, 3);
+        assert_eq!(state.warp_target, 5);
+        // y la tecla 5 ya no tiene mundo
+        update(&mut state, &mut ship, &scene, &select(5), 0.0, 0.016);
+        assert_eq!(state.warp_target, 5);
     }
 
     #[test]
