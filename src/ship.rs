@@ -98,9 +98,9 @@ const WARP_CANCEL_SPEED: f32 = 25.0;
 // q tan rapido prende y apaga el efecto visual
 const WARP_EFFECT_RESPONSE: f32 = 3.0;
 
-// las fases de un viaje, en orden
+/// las fases de un viaje, en orden (audio.rs las escucha pa saber q sonido tocar)
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum WarpPhase {
+pub enum WarpPhase {
     Align,
     Accelerate,
     Cruise,
@@ -168,6 +168,8 @@ pub struct Ship {
     pub pitch_rate: f32,
     /// si los cuerpos atraen a la nave o no (tecla G), el hud lo lee pa mostrarlo
     pub gravity_on: bool,
+    /// q tan fuerte pego contra un cuerpo en este cuadro (la velocidad q la colision le quito), 0 = no pego
+    pub impact: f32,
     // la orbita actual, None = vuelo normal
     orbit: Option<Orbit>,
     // de 0 a 1: 0 = orientacion de vuelo, 1 = orientacion de orbita, en medio = cambiando suave
@@ -211,7 +213,7 @@ pub struct ShipInput {
 
 impl Ship {
     pub fn new(position: Vec3) -> Ship {
-        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true, orbit: None, frame_blend: 0.0, orbit_forward: Vec3::ZERO, orbit_up: Vec3::UP, warp_trip: None, warp_effect: 0.0 }
+        Ship { position, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, boost: 0.0, yaw_rate: 0.0, pitch_rate: 0.0, gravity_on: true, impact: 0.0, orbit: None, frame_blend: 0.0, orbit_forward: Vec3::ZERO, orbit_up: Vec3::UP, warp_trip: None, warp_effect: 0.0 }
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -370,6 +372,11 @@ impl Ship {
     /// intensidad del efecto visual del warp, de 0 a 1
     pub fn warp_effect(&self) -> f32 {
         self.warp_effect
+    }
+
+    /// en q fase va el viaje, None = sin viaje
+    pub fn warp_phase(&self) -> Option<WarpPhase> {
+        self.warp_trip.as_ref().map(|trip| trip.phase)
     }
 
     /// empieza un viaje al mundo i, si ya estamos cerca de ese mundo no hace nada
@@ -545,6 +552,8 @@ impl Ship {
         if input.gravity_toggle {
             self.gravity_on = !self.gravity_on;
         }
+        // el golpe se mide de nuevo en cada cuadro, lo llena collide
+        self.impact = 0.0;
         if self.warp_trip.is_some() {
             // en un viaje la nave va sola, las teclas de vuelo no hacen nada
             self.warp_step(dt, scene, t);
@@ -647,6 +656,7 @@ impl Ship {
                 let into = self.velocity.dot(n);
                 if into < 0.0 {
                     self.velocity -= n * into; // quitar la velocidad que va hacia adentro
+                    self.impact = self.impact.max(-into);
                 }
             }
         }
@@ -855,6 +865,26 @@ mod tests {
         println!("en 20 s: distancia {after_20s:.2}, la menor fue {closest:.2}");
         assert!(closest >= floor - 1e-3);
         assert!((after_20s - floor).abs() < 0.05);
+    }
+
+    #[test]
+    fn el_golpe_mide_lo_q_la_colision_frena() {
+        let mut scene = Scene::new();
+        scene.bodies[1].orbit_speed = 0.0;
+        let dt = 1.0 / 60.0;
+        let center = scene.body_position(1, 0.0);
+        let floor = collision_radius(scene.bodies[1].radius);
+
+        // pegado a la colision y bajando recto a 20: el golpe es casi esos 20
+        let mut ship = Ship::new(center + Vec3::new(0.0, floor + 0.1, 0.0));
+        ship.gravity_on = false;
+        ship.velocity = Vec3::new(0.0, -20.0, 0.0);
+        ship.update(ShipInput::default(), dt, &scene, 0.0);
+        assert!(ship.impact > 15.0, "golpe {}", ship.impact);
+
+        // ya quieta en el suelo el siguiente cuadro no cuenta como golpe
+        ship.update(ShipInput::default(), dt, &scene, 0.0);
+        assert!(ship.impact < 1.0, "golpe {}", ship.impact);
     }
 
     #[test]

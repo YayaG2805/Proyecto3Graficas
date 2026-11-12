@@ -2,7 +2,9 @@
 //!
 //! raylib SOLO se usa para la ventana, leer teclado/mouse, mostrar nuestro framebuffer
 //! como textura 2D y escribir texto del HUD. Todo el 3D lo hace `renderer.rs`.
+//! También reproduce los .wav del sonido; qué suena y cuándo lo decide `audio.rs`.
 
+mod audio;
 mod creatures;
 mod exotics;
 mod hud;
@@ -629,6 +631,14 @@ fn main() {
 
     let mut game = Game::new();
 
+    // SONIDO: si no hay tarjeta de sonido el juego sigue, solo que callado.
+    // `sonidos` se declara después de `audio` para que se libere antes (sus sonidos dependen de él).
+    let audio = RaylibAudio::init_audio_device().ok().filter(|a| a.is_audio_device_ready());
+    if audio.is_none() {
+        eprintln!("No se pudo abrir el audio: se juega sin sonido");
+    }
+    let mut sonidos = audio.as_ref().map(|a| audio::Sonidos::new(a, &game.scene));
+
     // Textura donde se copia nuestro framebuffer cada cuadro.
     let image = Image::gen_image_color(RENDER_W as i32, RENDER_H as i32, Color::BLACK);
     let mut texture = rl.load_texture_from_image(&thread, &image).expect("no se pudo crear la textura");
@@ -656,9 +666,23 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
         }
+        // todas las teclas de prender/apagar de arriba suenan con un clic
+        let toggles = [KeyboardKey::KEY_C, KeyboardKey::KEY_L, KeyboardKey::KEY_O, KeyboardKey::KEY_N, KeyboardKey::KEY_H, KeyboardKey::KEY_F11];
+        if let Some(s) = &mut sonidos {
+            if toggles.iter().any(|&k| rl.is_key_pressed(k)) {
+                s.tocar(audio::Efecto::Interruptor);
+            }
+            if rl.is_key_pressed(KeyboardKey::KEY_M) {
+                s.tocar(audio::Efecto::Interruptor);
+                s.alternar_silencio();
+            }
+        }
 
         let input = read_input(&rl);
         game.update(input, dt);
+        if let Some(s) = &mut sonidos {
+            s.update(&game, &input, dt);
+        }
         game.render();
         texture.update_texture(&game.renderer.color).expect("no se pudo actualizar la textura");
 
@@ -698,9 +722,14 @@ fn main() {
                 18,
                 Color::LIGHTGRAY,
             );
+            let sound = match &sonidos {
+                Some(s) if s.silencio => "OFF",
+                Some(_) => "ON",
+                None => "sin audio",
+            };
             d.draw_text(
                 &format!(
-                    "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}",
+                    "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}   sonido [M]: {sound}",
                     if game.renderer.frustum_culling { "ON" } else { "OFF" },
                     if game.renderer.use_lod { "ON" } else { "OFF" },
                     if game.scene.show_orbits { "ON" } else { "OFF" },
@@ -770,7 +799,7 @@ fn main() {
                     Color::GOLD,
                 );
                 d.draw_text(
-                    "1-5 destino   Tab warp (otro Tab cancela)   G gravedad   P foto   C culling   L LOD   O orbitas   N normales   H ayuda   F11 pantalla",
+                    "1-5 destino   Tab warp (otro Tab cancela)   G gravedad   P foto   C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11 pantalla",
                     10,
                     WINDOW_H - 26,
                     16,

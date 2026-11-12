@@ -68,8 +68,8 @@ const CENTRAL_CITY_RADIUS: f32 = 1.2;
 const CENTRAL_CITY_ORBIT: f32 = 9.0;
 /// Radianes por segundo alrededor de Gotham (mucho más rápida que los planetas).
 const CENTRAL_CITY_ORBIT_SPEED: f32 = 0.6;
-/// Semilla de los cráteres y de los rayos.
-const CENTRAL_CITY_SEED: u32 = 69;
+/// Semilla de los cráteres y de los rayos (audio.rs también la usa para sincronizar el trueno).
+pub const CENTRAL_CITY_SEED: u32 = 69;
 /// Relieve de los cráteres, en fracción del radio.
 const CENTRAL_CITY_RELIEF: f32 = 0.05;
 

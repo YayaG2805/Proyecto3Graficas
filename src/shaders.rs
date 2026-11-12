@@ -763,11 +763,22 @@ fn random_dir(a: f32, b: f32) -> Vec3 {
     Vec3::new(r * ang.cos(), y, r * ang.sin())
 }
 
+/// En qué repetición va el rayo `i` en el tiempo `t`: la parte entera es la época y la parte
+/// decimal cuánto lleva de ella. Cada rayo tiene su propio desfase para que no caigan juntos.
+/// La usan el shader y el sonido (audio.rs), así el trueno suena justo cuando el rayo se ve.
+fn bolt_cycle(i: i32, t: f32, seed: u32) -> f32 {
+    t / CC_BOLT_PERIOD + hash01(i, 0, 0, seed) * 7.0
+}
+
+/// ¿Empezó algún rayo de Central City entre los tiempos `t0` y `t1`? (cambió su época)
+pub fn central_city_bolt_started(seed: u32, t0: f32, t1: f32) -> bool {
+    (0..CC_BOLTS).any(|i| bolt_cycle(i, t1, seed).floor() > bolt_cycle(i, t0, seed).floor())
+}
+
 impl CentralCityShader {
     /// Brillo del rayo `i` en el punto `p` (sobre la esfera de radio 1) en el tiempo `t`.
     fn bolt(&self, i: i32, p: Vec3, t: f32) -> f32 {
-        // Época y avance: cada rayo tiene su propio desfase para que no caigan juntos.
-        let cycle = t / CC_BOLT_PERIOD + hash01(i, 0, 0, self.seed) * 7.0;
+        let cycle = bolt_cycle(i, t, self.seed);
         let epoch = cycle.floor() as i32;
         let s = (cycle - cycle.floor()) / CC_BOLT_ACTIVE; // 0..1 mientras está encendido
         if s >= 1.0 {
