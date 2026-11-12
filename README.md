@@ -10,9 +10,9 @@ raylib solo se usa para abrir la ventana, leer el teclado, mostrar el framebuffe
 
 | Integrante | Contribución |
 |------------|--------------|
-| _(completar)_ | _(completar)_ |
-| _(completar)_ | _(completar)_ |
-| _(completar)_ | _(completar)_ |
+| Diego Sandoval | Modelo del Halcón Milenario en Blender; planetas Themyscira, Krypton, Gotham, Atlantis y Oa (superficies y shaders); objetos de superficie (árboles, cristales, edificios, corales) y su distribución procedural; pantalla completa; sonido; aviso de calor y explosión al chocar con el Sol; tour automático y pantalla de inicio |
+| Diego Guevara | Base del motor (pipeline de render, sol, planeta y nave); órbitas visibles; mapeo de normales; cielo con nebulosa y agujero negro; efecto visual del warp; HUD con ficha y radar; luna Central City; cinturón de asteroides y cometa; personajes de la Liga; monumentos y detalles de cada mundo; optimizaciones del renderer |
+| Adrián López | Giro progresivo; gravedad de los planetas; modo órbita; viaje warp; estado del juego y teclas (escaneo, destino, modo foto); cristales coleccionables; niveles de detalle (`draw_lods`); paneles y motores del shader del Halcón |
 
 ## Cómo ejecutarlo
 
@@ -180,4 +180,15 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 
 ## Recursos externos y asistencia
 
-_(completar)_
+- [raylib](https://www.raylib.com/) (crate `raylib` 5.5): ventana, teclado, mostrar el framebuffer,
+  texto del HUD y reproducir sonido. No se usan sus funciones de dibujo 3D, modelos, cámara,
+  materiales ni shaders.
+- [tobj](https://crates.io/crates/tobj): lectura de archivos `.obj`.
+- [rayon](https://crates.io/crates/rayon): paralelismo en el sombreado y el rasterizado.
+- [Blender](https://www.blender.org/): modelado de la nave, los personajes y los objetos de
+  superficie (los personajes y varios objetos se generan con los scripts `modelar_*.py` de
+  `assets/`).
+- Python con numpy: generación de los efectos de sonido (`assets/sonidos/generar_sonidos.py`).
+
+Se usó asistencia de IA como apoyo durante el desarrollo. El equipo entiende y puede explicar
+todo el código entregado.
