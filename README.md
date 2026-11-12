@@ -153,14 +153,18 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 
 ### Extras
 
-- **Carrera de anillos:** en cada mundo hay un circuito de 6 aros repartido alrededor del
-  planeta (`make_race_tracks` en `src/interaction.rs`, posiciones reproducibles con
-  `RACE_SEED`). Solo se puede jugar en modo órbita (tecla **F**); con **R** arranca el
-  cronómetro y hay que atravesar los aros en orden, con **R** otra vez se cancela. Todo pasa
-  en la misma escena, sin pantalla de carga: el aro de la torre se genera en el pipeline propio
-  (`Mesh::torus`), se dibuja con un shader animado propio (`RaceGateShader`) y la detección de
-  "pasó por el aro" usa la misma técnica anticolisión por tramo que los cristales. Guarda el
-  mejor tiempo de cada mundo mientras dure la partida.
+- **Carrera de anillos:** en cada mundo hay un circuito de aros alrededor del planeta
+  (`make_race_tracks` en `src/interaction.rs`, reproducible con `RACE_SEED`). Solo se puede
+  jugar en modo órbita (tecla **F**); con **R** arranca el cronómetro y hay que atravesar los
+  aros en orden, con **R** otra vez se cancela. Cada mundo tiene su propia forma y color
+  (`RaceTheme`): Themyscira es un círculo liso para aprender, Krypton una estrella de cristal
+  angulosa, Gotham zigzaguea como esquivando edificios, Atlantis ondula como las olas y Oa (el
+  anillo de poder) tiene más puertas y más seguido. La forma sale de variar el radio del
+  circuito con `sin(lobes · ángulo)`, así que sigue siendo 100% procedural y reproducible. Todo
+  pasa en la misma escena, sin pantalla de carga: el aro se genera en el pipeline propio
+  (`Mesh::torus`), se dibuja con un shader animado propio (`RaceGateShader`, con el color del
+  mundo) y la detección de "pasó por el aro" usa la misma técnica anticolisión por tramo que
+  los cristales. Guarda el mejor tiempo de cada mundo mientras dure la partida.
 - Personajes de la Liga en sus mundos (`src/creatures.rs`), cinturón de asteroides y cometa con
   órbita elíptica (`src/exotics.rs`), atmósferas, nubes, llamaradas solares y eclipse de Central
   City sobre Gotham.

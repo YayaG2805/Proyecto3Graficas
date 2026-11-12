@@ -42,11 +42,13 @@ const CRYSTAL_BAND_SPEED: f32 = 4.0;
 // --- carrera de anillos (tecla R): hay q estar en orbita (F) de un mundo pa poder jugarla ---
 // misma semilla = mismo circuito, se puede cambiar en vivo
 const RACE_SEED: u32 = 83;
+// cuantas puertas tiene un mundo q no esta en `race_theme` (no debería pasar, es el respaldo)
 const RACE_GATE_COUNT: usize = 6;
 // a q distancia del centro del mundo va el circuito: radio * esto + lo otro
-// un poco mas lejos q los cristales, pa q quepa rodeando el planeta sin rozar la superficie
-const RACE_RING_RADII: f32 = 1.8;
-const RACE_RING_EXTRA: f32 = 1.0;
+// bastante mas lejos q los cristales: con el circuito ondulado (RaceTheme::wobble) la puerta
+// mas cerrada todavia tiene q quedar bien afuera de la colision
+const RACE_RING_RADII: f32 = 2.2;
+const RACE_RING_EXTRA: f32 = 1.5;
 // q tan inclinado va el eje del circuito respecto a +y, pa q cada mundo se vea distinto
 const RACE_AXIS_TILT: f32 = 0.5;
 // tamaño del aro sin escalar: radio del circulo central y grosor del tubo
@@ -59,9 +61,36 @@ const RACE_PASS_LENIENCY: f32 = 1.5;
 // cuanto dura el mensaje de "carrera terminada" en el hud
 const RACE_RESULT_SECONDS: f32 = 6.0;
 
+/// la forma y el color del circuito de un mundo: cada héroe vuela distinto.
+/// `lobes` = cuantos "pétalos" tiene el circuito (0 = círculo perfecto) y `wobble` qué tan
+/// marcados son (0 a ~0.3): juntos hacen q el radio del circuito varíe con `sin(lobes * ángulo)`,
+/// asi cada mundo queda con una silueta distinta en vez de ser siempre el mismo círculo.
+struct RaceTheme {
+    lobes: f32,
+    wobble: f32,
+    gate_count: usize,
+    color: Vec3,
+}
+
+/// el circuito de cada mundo, pensado pa q se sienta distinto segun su héroe:
+/// Themyscira es el mas facil (un círculo liso, para aprender), Krypton es una estrella de
+/// cristal angulosa, Gotham zigzaguea esquivando "edificios", Atlantis ondula como las olas
+/// y Oa (el anillo de poder) tiene mas puertas y mas seguido.
+fn race_theme(name: &str) -> RaceTheme {
+    match name {
+        "Themyscira" => RaceTheme { lobes: 0.0, wobble: 0.0, gate_count: 6, color: Vec3::new(0.55, 0.9, 0.5) },
+        "Krypton" => RaceTheme { lobes: 5.0, wobble: 0.25, gate_count: 6, color: Vec3::new(0.35, 0.65, 1.0) },
+        "Gotham" => RaceTheme { lobes: 8.0, wobble: 0.18, gate_count: 7, color: Vec3::new(1.0, 0.85, 0.25) },
+        "Atlantis" => RaceTheme { lobes: 3.0, wobble: 0.3, gate_count: 6, color: Vec3::new(0.2, 0.75, 0.95) },
+        "Oa" => RaceTheme { lobes: 6.0, wobble: 0.22, gate_count: 8, color: Vec3::new(0.35, 1.0, 0.45) },
+        _ => RaceTheme { lobes: 0.0, wobble: 0.0, gate_count: RACE_GATE_COUNT, color: Vec3::new(1.0, 0.35, 0.65) },
+    }
+}
+
 // una puerta del circuito: offset fijo desde el centro del mundo (no rota con el giro del
 // planeta, igual q los cristales) y como esta orientada: la nave la atraviesa por el agujero,
-// en la direccion `forward` (es tangente al circulo, por donde se vuela rodeando el planeta)
+// en la direccion `forward` (tangente al circuito, por donde se vuela rodeando el planeta).
+// `color` es el del mundo (RaceTheme), asi cada circuito se ve distinto.
 #[derive(Clone, Copy)]
 struct RaceGate {
     offset: Vec3,
@@ -69,6 +98,7 @@ struct RaceGate {
     forward: Vec3,
     scale: f32,
     radius: f32,
+    color: Vec3,
 }
 
 // un vector cualquiera en angulo recto con v, pa armar una base ortonormal
@@ -77,8 +107,9 @@ fn perpendicular(v: Vec3) -> Vec3 {
     v.cross(axis).normalized()
 }
 
-// arma el circuito de cada mundo: un circulo de puertas repartidas parejo, con el eje
-// inclinado distinto en cada uno; todo sale de la semilla, asi q es reproducible
+// arma el circuito de cada mundo: puertas repartidas parejo alrededor de un circulo cuyo
+// radio varia con `sin(lobes * angulo)` (RaceTheme) y cuyo eje va inclinado distinto en cada
+// mundo; todo sale de la semilla, asi q es reproducible
 fn make_race_tracks(scene: &Scene, seed: u32) -> Vec<Vec<RaceGate>> {
     scene
         .bodies
@@ -89,21 +120,39 @@ fn make_race_tracks(scene: &Scene, seed: u32) -> Vec<Vec<RaceGate>> {
             if i < FIRST_WORLD || b.parent.is_some() {
                 return Vec::new();
             }
+            let theme = race_theme(b.name);
             let polar = hash01(i as i32, 20, 0, seed) * RACE_AXIS_TILT;
             let azimuth = hash01(i as i32, 21, 0, seed) * std::f32::consts::TAU;
             let axis = Vec3::new(polar.sin() * azimuth.cos(), polar.cos(), polar.sin() * azimuth.sin()).normalized();
             let t1 = perpendicular(axis);
             let t2 = axis.cross(t1);
-            let ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
+            let base_ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
             let scale = b.radius * RACE_GATE_SCALE_RADII;
-            (0..RACE_GATE_COUNT)
+            (0..theme.gate_count)
                 .map(|k| {
-                    let a = k as f32 / RACE_GATE_COUNT as f32 * std::f32::consts::TAU;
-                    let offset = (t1 * a.cos() + t2 * a.sin()) * ring;
-                    // la tangente del circulo en este punto: por donde hay q volar pa atravesarla
-                    let forward = (t2 * a.cos() - t1 * a.sin()).normalized();
+                    let a = k as f32 / theme.gate_count as f32 * std::f32::consts::TAU;
+                    // radio del circuito en este angulo: circulo perfecto si wobble = 0, si no
+                    // "respira" con sin(lobes * a) y da una silueta de flor o de estrella
+                    let shape = (theme.lobes * a).sin();
+                    let shape_derivative = theme.lobes * (theme.lobes * a).cos();
+                    let r = base_ring * (1.0 + theme.wobble * shape);
+                    let dr = base_ring * theme.wobble * shape_derivative;
+                    let radial = t1 * a.cos() + t2 * a.sin();
+                    // derivada de `radial` respecto al angulo: hacia donde se mueve al crecer a
+                    let radial_perp = t2 * a.cos() - t1 * a.sin();
+                    let offset = radial * r;
+                    // la tangente real del circuito (incluyendo q el radio tambien cambia),
+                    // por donde hay q volar pa atravesar la puerta de frente
+                    let forward = (radial_perp * r + radial * dr).normalized();
                     let right = forward.cross(axis).normalized();
-                    RaceGate { offset, right, forward, scale, radius: scale * (RACE_GATE_MAJOR - RACE_GATE_MINOR) * RACE_PASS_LENIENCY }
+                    RaceGate {
+                        offset,
+                        right,
+                        forward,
+                        scale,
+                        radius: scale * (RACE_GATE_MAJOR - RACE_GATE_MINOR) * RACE_PASS_LENIENCY,
+                        color: theme.color,
+                    }
                 })
                 .collect()
         })
@@ -342,7 +391,7 @@ impl GameState {
         for (k, gate) in gates.iter().enumerate().skip(active.next_gate) {
             let up = gate.right.cross(gate.forward);
             let model = Mat4::from_basis(gate.right, up, gate.forward, center + gate.offset) * Mat4::scale(Vec3::splat(gate.scale));
-            let shader: Arc<dyn FragmentShader> = Arc::new(RaceGateShader { next: k == active.next_gate });
+            let shader: Arc<dyn FragmentShader> = Arc::new(RaceGateShader { color: gate.color, next: k == active.next_gate });
             r.draw_mesh_additive(&self.race_gate_mesh, &model, shader);
         }
     }
@@ -913,5 +962,30 @@ mod tests {
         assert!(a[0].is_empty());
         let central_city = scene.bodies.iter().position(|b| b.name == "Central City").unwrap();
         assert!(a[central_city].is_empty());
+    }
+
+    #[test]
+    fn el_circuito_de_cada_mundo_queda_lejos_de_la_colision_y_se_ve_distinto() {
+        let scene = Scene::new();
+        let tracks = make_race_tracks(&scene, RACE_SEED);
+        for world in 1..=5 {
+            let floor = collision_radius(scene.bodies[world].radius);
+            for gate in &tracks[world] {
+                assert!(
+                    gate.offset.length() > floor + 1.0,
+                    "{} tiene una puerta a {:.2} de distancia, muy cerca de la colision en {:.2}",
+                    scene.bodies[world].name,
+                    gate.offset.length(),
+                    floor
+                );
+            }
+        }
+        // cada mundo tiene su propio color de circuito (RaceTheme)
+        let colors: Vec<Vec3> = (1..=5).map(|w| tracks[w][0].color).collect();
+        for a in 0..colors.len() {
+            for b in (a + 1)..colors.len() {
+                assert!((colors[a] - colors[b]).length() > 0.05, "dos mundos comparten el color de su carrera");
+            }
+        }
     }
 }

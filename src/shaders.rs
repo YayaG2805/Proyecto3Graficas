@@ -1085,6 +1085,8 @@ impl FragmentShader for OrbitShader {
 // adelante se ven tenues y quietas, así se distingue cuál hay que cruzar ya.
 // ---------------------------------------------------------------------------
 pub struct RaceGateShader {
+    /// el color del mundo (RaceTheme en interaction.rs): cada circuito se ve distinto.
+    pub color: Vec3,
     pub next: bool,
 }
 
@@ -1093,9 +1095,11 @@ impl FragmentShader for RaceGateShader {
         // franjas alrededor del tubo (uv.0 da la vuelta grande del toro) q giran con el tiempo
         let speed = if self.next { 2.5 } else { 0.8 };
         let stripe = if (f.uv.0 * 10.0 - u.time * speed).rem_euclid(1.0) < 0.5 { 1.0 } else { 0.35 };
-        let pulse = if self.next { 0.65 + 0.35 * (u.time * 5.0).sin() } else { 0.45 };
-        let base = if self.next { Vec3::new(1.0, 0.35, 0.65) } else { Vec3::new(0.35, 0.55, 1.0) };
-        base * (pulse * stripe)
+        let pulse = if self.next { 0.75 + 0.35 * (u.time * 5.0).sin() } else { 0.4 };
+        // la proxima puerta se aclara hacia blanco pa q siempre se distinga cual toca ahora,
+        // aunque el color base cambie de un mundo a otro
+        let tint = if self.next { Vec3::splat(1.0).lerp(self.color, 0.4) } else { self.color };
+        tint * (pulse * stripe)
     }
 }
 
