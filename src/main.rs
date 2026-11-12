@@ -22,6 +22,7 @@ mod scene;
 mod shaders;
 mod ship;
 mod texture;
+mod tour;
 
 use creatures::{create_creatures, Creature};
 use exotics::{AsteroidBelt, Comet, ASTEROID_SEED};
@@ -83,6 +84,14 @@ const HEAT_SHAKE: f32 = 0.08;
 const HEAT_COLOR: Vec3 = Vec3::new(1.0, 0.3, 0.05);
 const FLASH_COLOR: Vec3 = Vec3::new(1.0, 0.95, 0.8);
 
+// --- Pantalla de inicio: la cámara gira despacio alrededor de todo el sistema ---
+const TITLE_DISTANCE: f32 = 210.0;
+const TITLE_HEIGHT: f32 = 60.0;
+/// Radianes por segundo de la vuelta de la cámara.
+const TITLE_SPIN: f32 = 0.04;
+/// Oscurece el centro de la pantalla para que el título se lea sobre los planetas.
+const TITLE_SHADE: f32 = 0.45;
+
 /// Color del punto de cada cuerpo en el radar.
 fn body_color(name: &str) -> Vec3 {
     match name {
@@ -139,6 +148,10 @@ struct Game {
     explosion: Option<Explosion>,
     /// Pedazos de la nave, bola de fuego y onda: se arman una vez al cargar.
     explosion_assets: ExplosionAssets,
+    /// Tour automático (tecla T): mientras exista, él decide las teclas de vuelo.
+    tour: Option<tour::Tour>,
+    /// Pantalla de inicio: la cámara gira alrededor del sistema hasta que se aprieta Enter.
+    title: bool,
 }
 
 impl Game {
@@ -209,6 +222,8 @@ impl Game {
             heat: 0.0,
             explosion: None,
             explosion_assets,
+            tour: None,
+            title: false,
         }
     }
 
@@ -237,11 +252,23 @@ impl Game {
         }
     }
 
-    fn update(&mut self, input: ShipInput, dt: f32) {
+    /// Un cuadro del juego. Devuelve las teclas que de verdad se usaron (las del jugador o,
+    /// en el tour, las del piloto automático), para que el sonido reaccione a las mismas.
+    fn update(&mut self, input: ShipInput, dt: f32) -> ShipInput {
+        // pantalla de inicio: solo corre el tiempo y la cámara gira alrededor del sistema
+        if self.title {
+            self.time += dt;
+            self.title_camera();
+            return ShipInput::default();
+        }
+
+        // el tour decide las teclas, salvo que el jugador apriete alguna de vuelo
+        let input = self.drive_tour(input, dt);
+
         // paso 0: si la nave está explotando no hay vuelo, va por otro camino
         if self.explosion.is_some() {
             self.update_exploding(input, dt);
-            return;
+            return input;
         }
 
         // paso 1: en modo foto todo se queda congelado, ni el tiempo ni la nave avanzan
@@ -286,6 +313,46 @@ impl Game {
                 self.explode();
             }
         }
+        input
+    }
+
+    /// Si hay tour, sus teclas reemplazan a las del jugador. Cualquier tecla de vuelo del
+    /// jugador (o una explosión) lo termina. En modo foto el tour se pausa.
+    fn drive_tour(&mut self, input: ShipInput, dt: f32) -> ShipInput {
+        if self.tour.is_some() && (tour::player_took_control(&input) || self.explosion.is_some()) {
+            self.tour = None;
+        }
+        match &mut self.tour {
+            Some(t) if !self.state.photo_mode => {
+                let mut auto = t.drive(&self.ship, &self.state, &self.scene, self.time, dt);
+                auto.photo = input.photo; // la P sigue siendo del jugador
+                auto
+            }
+            _ => input,
+        }
+    }
+
+    /// Tecla T: empieza el tour (desde el destino elegido) o lo termina.
+    fn toggle_tour(&mut self) {
+        self.tour = match self.tour {
+            Some(_) => None,
+            None if self.explosion.is_none() => Some(tour::Tour::new(self.state.warp_target)),
+            None => None,
+        };
+    }
+
+    /// Cámara de la pantalla de inicio: da vueltas despacio alrededor del Sol, desde arriba.
+    fn title_camera(&mut self) {
+        let a = self.time * TITLE_SPIN;
+        self.camera.position = Vec3::new(a.cos() * TITLE_DISTANCE, TITLE_HEIGHT, a.sin() * TITLE_DISTANCE);
+        self.camera.target = Vec3::ZERO;
+        self.camera.up = Vec3::UP;
+    }
+
+    /// Enter en la pantalla de inicio: la cámara vuelve detrás de la nave y empieza el juego.
+    fn start(&mut self) {
+        self.title = false;
+        self.camera = ChaseCamera::new(&self.ship);
     }
 
     /// La nave tocó el Sol: se cancela todo lo que estaba haciendo y empieza la explosión.
@@ -350,6 +417,12 @@ impl Game {
     /// HUD dibujado en NUESTRO framebuffer: el radar y el fondo de la ficha.
     /// Va después del sombreado porque se pinta encima de la imagen final.
     fn draw_overlay(&mut self) {
+        if self.title {
+            // en la pantalla de inicio no hay radar: solo se oscurece el centro para el título
+            let mut cv = Canvas { px: &mut self.renderer.color, w: RENDER_W, h: RENDER_H };
+            hud::draw_vignette(&mut cv, Vec3::ZERO, TITLE_SHADE, TITLE_SHADE * 0.2);
+            return;
+        }
         let mut blips: Vec<RadarBlip> = self
             .scene
             .bodies
@@ -682,6 +755,14 @@ fn snapshot() {
         println!("snap_calor.ppm y snap_explosion*.ppm: listo");
     }
 
+    // Pantalla de inicio (sin los textos, que los escribe raylib en la ventana).
+    g.title = true;
+    g.update(ShipInput::default(), 0.0);
+    g.render();
+    g.renderer.save_ppm("snap_titulo.ppm").expect("no se pudo guardar");
+    g.title = false;
+    println!("snap_titulo.ppm: listo");
+
     // Comparación para la demo: la vista del cinturón con culling (C) y LOD (L) prendidos y apagados.
     // Demuestra que las dos técnicas cambian el trabajo que hace el renderer.
     aim_ship(&mut g, BELT_SHOT, 0);
@@ -791,6 +872,7 @@ fn main() {
     }
 
     let mut game = Game::new();
+    game.title = true; // se empieza en la pantalla de inicio (el snapshot y los tests no)
 
     // SONIDO: si no hay tarjeta de sonido el juego sigue, solo que callado.
     // `sonidos` se declara después de `audio` para que se libere antes (sus sonidos dependen de él).
@@ -839,10 +921,30 @@ fn main() {
             }
         }
 
+        // Pantalla de inicio: Enter empieza a jugar y T empieza directo con el tour automático.
+        // Ya jugando, T prende o apaga el tour.
+        let tour_key = rl.is_key_pressed(KeyboardKey::KEY_T);
+        if game.title {
+            if rl.is_key_pressed(KeyboardKey::KEY_ENTER) || tour_key {
+                game.start();
+                if tour_key {
+                    game.toggle_tour();
+                }
+                if let Some(s) = &sonidos {
+                    s.tocar(audio::Efecto::Destino);
+                }
+            }
+        } else if tour_key {
+            game.toggle_tour();
+            if let Some(s) = &sonidos {
+                s.tocar(audio::Efecto::Interruptor);
+            }
+        }
+
         let input = read_input(&rl);
-        game.update(input, dt);
+        let used = game.update(input, dt);
         if let Some(s) = &mut sonidos {
-            s.update(&game, &input, dt);
+            s.update(&game, &used, dt);
         }
         game.render();
         texture.update_texture(&game.renderer.color).expect("no se pudo actualizar la textura");
@@ -863,124 +965,145 @@ fn main() {
                 Color::WHITE,
             );
 
-            // HUD
-            let s = game.renderer.stats;
-            let speed = game.ship.velocity.length();
-            // en orbita muestra el mundo, si no avisa si ya estamos lo bastante cerca pa apretar la f
-            let orbit_text = match game.state.orbit_lock {
-                Some(i) => game.scene.bodies[i].name,
-                None if interaction::orbit_in_range(&game.state, &game.scene) => "disponible",
-                None => "lejos",
-            };
-            d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}   orbita [F]: {orbit_text}", game.warp), 10, 10, 20, Color::RAYWHITE);
-            d.draw_text(
-                &format!(
-                    "objetos: {} dibujados / {} descartados   triangulos: {} entran / {} rasterizados",
-                    s.objects_drawn, s.objects_culled, s.triangles_in, s.triangles_rasterized
-                ),
-                10,
-                34,
-                18,
-                Color::LIGHTGRAY,
-            );
-            let sound = match &sonidos {
-                Some(s) if s.silencio => "OFF",
-                Some(_) => "ON",
-                None => "sin audio",
-            };
-            d.draw_text(
-                &format!(
-                    "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}   sonido [M]: {sound}",
-                    if game.renderer.frustum_culling { "ON" } else { "OFF" },
-                    if game.renderer.use_lod { "ON" } else { "OFF" },
-                    if game.scene.show_orbits { "ON" } else { "OFF" },
-                    if game.normal_mapping { "ON" } else { "OFF" },
-                    if game.ship.gravity_on { "ON" } else { "OFF" }
-                ),
-                10,
-                56,
-                18,
-                Color::LIGHTGRAY,
-            );
-            // El destino del warp, si ya vamos viajando y los coleccionables
-            // (el total lo llena interaction.rs cuando haya cristales).
-            let target = game.scene.bodies[game.state.warp_target].name;
-            let crystals = if game.state.total > 0 {
-                format!("{}/{}", game.state.collected, game.state.total)
+            if game.title {
+                // PANTALLA DE INICIO (el sistema gira de fondo; el centro ya viene oscurecido)
+                let y = WINDOW_H / 2;
+                draw_centered!(d, "SISTEMA SOLAR", y - 210, 72, Color::RAYWHITE);
+                draw_centered!(d, "un recorrido por los mundos de la Liga", y - 128, 26, Color::GOLD);
+                draw_centered!(d, "Renderer por software  -  Graficas por Computadora 2026", y - 92, 20, Color::LIGHTGRAY);
+                draw_centered!(d, "W/S acelerar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar", y - 20, 18, Color::SKYBLUE);
+                draw_centered!(d, "F orbita   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda", y + 6, 18, Color::SKYBLUE);
+                if (game.time * 3.0).sin() > -0.4 {
+                    draw_centered!(d, "ENTER para empezar", y + 90, 34, Color::RAYWHITE);
+                }
+                draw_centered!(d, "T  para ver el tour automatico", y + 134, 22, Color::GOLD);
             } else {
-                "-".to_string()
-            };
-            d.draw_text(
-                &format!(
-                    "destino [1-5]: {target}   warp [Tab]: {}   cristales: {crystals}",
-                    if game.ship.warping() { "viajando" } else { "listo" }
-                ),
-                10,
-                78,
-                18,
-                Color::SKYBLUE,
-            );
-
-            // Aviso para escanear cuando hay un mundo cerca y su ficha no está abierta.
-            if let Some(i) = game.state.nearest {
-                let b = &game.scene.bodies[i];
-                if game.card_body.is_none() && game.state.nearest_dist < SCAN_HINT_RADII * b.radius {
-                    d.draw_text(&format!("[E] escanear {}", hud::to_ascii(b.name)), 10, 102, 20, Color::GOLD);
-                }
-            }
-
-            // Letreros al centro: la explosión o, si no, el aviso de calor.
-            if let Some(e) = &game.explosion {
-                let left = (EXPLOSION_TIME - e.age).max(0.0).ceil() as i32;
-                let world = hud::to_ascii(game.scene.bodies[game.state.warp_target].name);
-                draw_centered!(d, "NAVE DESTRUIDA", WINDOW_H / 2 - 80, 48, Color::new(255, 90, 40, 255));
-                draw_centered!(d, &format!("reapareciendo en {left} s junto a {world}"), WINDOW_H / 2 - 22, 22, Color::RAYWHITE);
-                draw_centered!(d, "[1-5] elegir otro mundo", WINDOW_H / 2 + 8, 18, Color::GOLD);
-            } else if game.heat > HEAT_WARNING {
-                // cuando ya es peligroso el letrero parpadea
-                if game.heat < HEAT_DANGER || (game.time * 6.0).sin() > -0.3 {
-                    draw_centered!(d, "ALERTA: CALOR EXTREMO", 130, 30, Color::new(255, 80, 30, 255));
-                    draw_centered!(d, "alejate del Sol o la nave explota", 166, 20, Color::ORANGE);
-                }
-            }
-
-            // Ficha del planeta escaneado (el fondo ya lo pintó draw_overlay en el framebuffer).
-            if let Some(i) = game.card_body {
-                let b = &game.scene.bodies[i];
-                let (x, mut y) = (CARD_X0 * HUD_SCALE + 14, CARD_Y0 * HUD_SCALE + 12);
-                d.draw_text(&hud::to_ascii(b.info.title), x, y, 24, Color::RAYWHITE);
-                y += 30;
-                d.draw_text(&format!("Heroe: {}", hud::to_ascii(b.info.hero)), x, y, 18, Color::GOLD);
-                y += 28;
-                for line in hud::wrap(&hud::to_ascii(b.info.fact), CARD_WRAP) {
-                    d.draw_text(&line, x, y, 16, Color::LIGHTGRAY);
-                    y += 20;
-                }
+                // HUD
+                let s = game.renderer.stats;
+                let speed = game.ship.velocity.length();
+                // en orbita muestra el mundo, si no avisa si ya estamos lo bastante cerca pa apretar la f
+                let orbit_text = match game.state.orbit_lock {
+                    Some(i) => game.scene.bodies[i].name,
+                    None if interaction::orbit_in_range(&game.state, &game.scene) => "disponible",
+                    None => "lejos",
+                };
+                d.draw_text(&format!("FPS: {fps}   velocidad: {speed:.1}   warp: {:.2}   orbita [F]: {orbit_text}", game.warp), 10, 10, 20, Color::RAYWHITE);
                 d.draw_text(
-                    &format!("radio: {:.1}   gravedad: {:.0}", b.radius, b.gravity),
-                    x,
-                    CARD_Y1 * HUD_SCALE - 30,
+                    &format!(
+                        "objetos: {} dibujados / {} descartados   triangulos: {} entran / {} rasterizados",
+                        s.objects_drawn, s.objects_culled, s.triangles_in, s.triangles_rasterized
+                    ),
+                    10,
+                    34,
+                    18,
+                    Color::LIGHTGRAY,
+                );
+                let sound = match &sonidos {
+                    Some(s) if s.silencio => "OFF",
+                    Some(_) => "ON",
+                    None => "sin audio",
+                };
+                d.draw_text(
+                    &format!(
+                        "culling [C]: {}   LOD [L]: {}   orbitas [O]: {}   normales [N]: {}   gravedad [G]: {}   sonido [M]: {sound}",
+                        if game.renderer.frustum_culling { "ON" } else { "OFF" },
+                        if game.renderer.use_lod { "ON" } else { "OFF" },
+                        if game.scene.show_orbits { "ON" } else { "OFF" },
+                        if game.normal_mapping { "ON" } else { "OFF" },
+                        if game.ship.gravity_on { "ON" } else { "OFF" }
+                    ),
+                    10,
+                    56,
+                    18,
+                    Color::LIGHTGRAY,
+                );
+                // El destino del warp, si ya vamos viajando y los coleccionables
+                // (el total lo llena interaction.rs cuando haya cristales).
+                let target = game.scene.bodies[game.state.warp_target].name;
+                let crystals = if game.state.total > 0 {
+                    format!("{}/{}", game.state.collected, game.state.total)
+                } else {
+                    "-".to_string()
+                };
+                d.draw_text(
+                    &format!(
+                        "destino [1-5]: {target}   warp [Tab]: {}   cristales: {crystals}",
+                        if game.ship.warping() { "viajando" } else { "listo" }
+                    ),
+                    10,
+                    78,
                     18,
                     Color::SKYBLUE,
                 );
-            }
 
-            if show_help {
-                // son dos lineas porque en una ya no cabia en la ventana
-                d.draw_text(
-                    "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear",
-                    10,
-                    WINDOW_H - 48,
-                    16,
-                    Color::GOLD,
-                );
-                d.draw_text(
-                    "1-5 destino   Tab warp (otro Tab cancela)   G gravedad   P foto   C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11 pantalla",
-                    10,
-                    WINDOW_H - 26,
-                    16,
-                    Color::GOLD,
-                );
+                // Aviso para escanear cuando hay un mundo cerca y su ficha no está abierta.
+                if let Some(i) = game.state.nearest {
+                    let b = &game.scene.bodies[i];
+                    if game.card_body.is_none() && game.state.nearest_dist < SCAN_HINT_RADII * b.radius {
+                        d.draw_text(&format!("[E] escanear {}", hud::to_ascii(b.name)), 10, 102, 20, Color::GOLD);
+                    }
+                }
+
+                // Letreros al centro: la explosión o, si no, el aviso de calor.
+                if let Some(e) = &game.explosion {
+                    let left = (EXPLOSION_TIME - e.age).max(0.0).ceil() as i32;
+                    let world = hud::to_ascii(game.scene.bodies[game.state.warp_target].name);
+                    draw_centered!(d, "NAVE DESTRUIDA", WINDOW_H / 2 - 80, 48, Color::new(255, 90, 40, 255));
+                    draw_centered!(d, &format!("reapareciendo en {left} s junto a {world}"), WINDOW_H / 2 - 22, 22, Color::RAYWHITE);
+                    draw_centered!(d, "[1-5] elegir otro mundo", WINDOW_H / 2 + 8, 18, Color::GOLD);
+                } else if game.heat > HEAT_WARNING {
+                    // cuando ya es peligroso el letrero parpadea
+                    if game.heat < HEAT_DANGER || (game.time * 6.0).sin() > -0.3 {
+                        draw_centered!(d, "ALERTA: CALOR EXTREMO", 130, 30, Color::new(255, 80, 30, 255));
+                        draw_centered!(d, "alejate del Sol o la nave explota", 166, 20, Color::ORANGE);
+                    }
+                }
+
+                // Ficha del planeta escaneado (el fondo ya lo pintó draw_overlay en el framebuffer).
+                if let Some(i) = game.card_body {
+                    let b = &game.scene.bodies[i];
+                    let (x, mut y) = (CARD_X0 * HUD_SCALE + 14, CARD_Y0 * HUD_SCALE + 12);
+                    d.draw_text(&hud::to_ascii(b.info.title), x, y, 24, Color::RAYWHITE);
+                    y += 30;
+                    d.draw_text(&format!("Heroe: {}", hud::to_ascii(b.info.hero)), x, y, 18, Color::GOLD);
+                    y += 28;
+                    for line in hud::wrap(&hud::to_ascii(b.info.fact), CARD_WRAP) {
+                        d.draw_text(&line, x, y, 16, Color::LIGHTGRAY);
+                        y += 20;
+                    }
+                    d.draw_text(
+                        &format!("radio: {:.1}   gravedad: {:.0}", b.radius, b.gravity),
+                        x,
+                        CARD_Y1 * HUD_SCALE - 30,
+                        18,
+                        Color::SKYBLUE,
+                    );
+                }
+
+                // Tour automático: qué está haciendo y cómo salir.
+                if let Some(t) = &game.tour {
+                    let text = format!("TOUR AUTOMATICO: {}", hud::to_ascii(&t.describe(&game.scene)));
+                    draw_centered!(d, &text, WINDOW_H - 110, 24, Color::GOLD);
+                    draw_centered!(d, "cualquier tecla de vuelo o T para tomar el control", WINDOW_H - 80, 18, Color::LIGHTGRAY);
+                }
+
+                if show_help {
+                    // son dos lineas porque en una ya no cabia en la ventana
+                    d.draw_text(
+                        "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear",
+                        10,
+                        WINDOW_H - 48,
+                        16,
+                        Color::GOLD,
+                    );
+                    d.draw_text(
+                        "1-5 destino   Tab warp/cancelar   G gravedad   P foto   T tour   C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11",
+                        10,
+                        WINDOW_H - 26,
+                        16,
+                        Color::GOLD,
+                    );
+                }
             }
         }
 
@@ -1157,6 +1280,84 @@ mod tests {
         wait_explosion(&mut g);
         g.update(ShipInput::default(), dt);
         assert_eq!(g.state.nearest, Some(5));
+    }
+
+    #[test]
+    fn el_tour_viaja_rodea_un_mundo_y_se_aleja() {
+        let mut g = Game::new();
+        let dt = 1.0 / 30.0;
+        g.toggle_tour();
+        let (mut warped, mut orbited, mut scanned) = (false, None, false);
+        let mut t = 0.0;
+        // un minuto de juego alcanza pa visitar el primer mundo completo
+        while t < 60.0 && g.tour.as_ref().is_some_and(|tour| tour.laps_done == 0 || g.state.orbit_lock.is_some()) {
+            g.update(ShipInput::default(), dt);
+            warped |= g.ship.warping();
+            orbited = orbited.or(g.state.orbit_lock);
+            scanned |= g.state.scanned.is_some();
+            assert!(g.explosion.is_none(), "el tour no debe chocar con el Sol");
+            t += dt;
+        }
+        let tour = g.tour.as_ref().expect("el tour sigue andando");
+        println!("primer mundo en {t:.1} s");
+        assert!(warped, "viajo con warp");
+        assert_eq!(orbited, Some(1), "se engancho a la orbita del primer destino");
+        assert!(scanned, "mostro la ficha del mundo");
+        assert_eq!(tour.laps_done, 1, "le dio la vuelta completa");
+        assert_eq!(g.state.orbit_lock, None, "y la solto para alejarse");
+    }
+
+    #[test]
+    fn el_tour_recorre_los_cinco_mundos_sin_chocar() {
+        let mut g = Game::new();
+        let dt = 1.0 / 30.0;
+        g.toggle_tour();
+        let mut visited = Vec::new();
+        let mut t = 0.0;
+        while t < 240.0 && visited.len() < 5 {
+            g.update(ShipInput::default(), dt);
+            assert!(g.explosion.is_none(), "el tour exploto en t = {t:.1}");
+            if let Some(i) = g.state.orbit_lock {
+                if !visited.contains(&i) {
+                    visited.push(i);
+                }
+            }
+            t += dt;
+        }
+        println!("orden de visita: {visited:?} en {t:.0} s");
+        assert_eq!(visited, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn una_tecla_de_vuelo_detiene_el_tour() {
+        let mut g = Game::new();
+        g.toggle_tour();
+        g.update(ShipInput::default(), 1.0 / 60.0);
+        assert!(g.tour.is_some());
+        // la P (foto) no lo detiene: solo lo pausa
+        g.update(ShipInput { photo: true, ..Default::default() }, 1.0 / 60.0);
+        assert!(g.tour.is_some());
+        g.update(ShipInput { photo: true, ..Default::default() }, 1.0 / 60.0);
+        // acelerar si
+        g.update(ShipInput { thrust: 1.0, ..Default::default() }, 1.0 / 60.0);
+        assert!(g.tour.is_none());
+    }
+
+    #[test]
+    fn la_pantalla_de_inicio_no_mueve_la_nave() {
+        let mut g = Game::new();
+        g.title = true;
+        let pos = g.ship.position;
+        for _ in 0..60 {
+            g.update(ShipInput { thrust: 1.0, warp: true, ..Default::default() }, 1.0 / 60.0);
+        }
+        assert_eq!((g.ship.position - pos).length(), 0.0);
+        assert!(g.time > 0.9, "los planetas si siguen girando");
+        // la camara da vueltas lejos, mirando al Sol
+        assert!((g.camera.position.length() - (TITLE_DISTANCE.powi(2) + TITLE_HEIGHT.powi(2)).sqrt()).abs() < 1e-2);
+        g.start();
+        assert!(!g.title);
+        assert!((g.camera.position - g.ship.position).length() < 10.0, "la camara vuelve detras de la nave");
     }
 
     #[test]

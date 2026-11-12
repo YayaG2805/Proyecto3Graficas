@@ -265,7 +265,8 @@ impl<'a> Sonidos<'a> {
         let congelado = st.photo_mode;
         // Mientras explota la nave no existe: tampoco suenan sus loops ni sus efectos.
         let explotando = g.explosion.is_some();
-        let callada = congelado || explotando;
+        // En la pantalla de inicio la nave tampoco vuela.
+        let callada = congelado || explotando || g.title;
 
         // --- 1. Loops de la nave ---
         let brillo = ship.engine_glow();
