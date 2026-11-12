@@ -1104,6 +1104,36 @@ impl FragmentShader for RaceGateShader {
 }
 
 // ---------------------------------------------------------------------------
+// PELIGRO (Krypton, esquiva de cristales): rojo/naranja q late rapido, siempre se lee como
+// "no lo toques" sin importar el mundo.
+// ---------------------------------------------------------------------------
+pub struct HazardShader;
+
+impl FragmentShader for HazardShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let warn = 0.5 + 0.5 * (u.time * 8.0 + f.local_pos.x * 3.0 + f.local_pos.z * 3.0).sin();
+        Vec3::new(1.0, 0.25, 0.1) * (0.5 + 0.5 * warn)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MARCADOR generico (Gotham/Atlantis: señales de la patrulla / corrientes): un gema q brilla
+// con el color del mundo y un borde mas claro, pa q se distinga de lejos.
+// ---------------------------------------------------------------------------
+pub struct MarkerShader {
+    pub color: Vec3,
+}
+
+impl FragmentShader for MarkerShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        let pulse = 0.6 + 0.4 * (u.time * 3.0 + f.local_pos.y * 2.0).sin();
+        let to_camera = (u.camera_pos - f.world_pos).normalized();
+        let rim = (1.0 - f.normal.dot(to_camera).abs()).powf(2.0);
+        self.color * pulse + Vec3::splat(rim * 0.5)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CIELO (skybox procedural): se evalúa por dirección de vista en cada píxel vacío.
 // Las estrellas están "pegadas" a la dirección, así que se ven en el horizonte y
 // giran correctamente cuando gira la cámara (pero no se acercan al moverse).

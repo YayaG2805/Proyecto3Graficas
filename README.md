@@ -60,7 +60,7 @@ Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, explosión, Apoko
 | 1 – 5 | Elegir destino: Themyscira, Krypton, Gotham, Atlantis, Oa (6: Apokolips, cuando aparece) |
 | Tab | Warp al destino (otro Tab lo cancela) |
 | K | Abrir el Boom Tube de Apokolips sin juntar los cristales (atajo para la demo) |
-| R | Carrera de anillos del mundo cercano (hay que estar en órbita, tecla F) |
+| R | Minijuego del mundo cercano: empezar o cancelar (hay que estar en órbita, tecla F) |
 | G | Prender / apagar la gravedad |
 | P | Modo foto (congela todo; la cámara sigue) |
 | C | Prender / apagar el culling por frustum |
@@ -78,8 +78,8 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 1. En la pantalla de inicio, **T** arranca el tour automático: vuelo espacial, warp a un mundo,
    escaneo, vuelta completa pegado a la superficie y alejamiento, mundo tras mundo.
 2. Para pilotear: **1–5** para elegir un mundo, **Tab** para viajar, **F** al llegar para rodearlo,
-   **E** para ver su ficha, **R** para correr el circuito de anillos de ese mundo, y **F** o
-   **Shift** para alejarse.
+   **E** para ver su ficha, **R** para jugar el minijuego de ese mundo, y **F** o **Shift**
+   para alejarse.
 3. Con **C** y **L** se ve en el HUD cómo cambian los objetos y triángulos procesados.
 4. Si la nave se acerca demasiado al Sol aparece el aviso de calor; si lo toca, explota y
    reaparece junto al mundo elegido.
@@ -153,18 +153,24 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 
 ### Extras
 
-- **Carrera de anillos:** en cada mundo hay un circuito de aros alrededor del planeta
-  (`make_race_tracks` en `src/interaction.rs`, reproducible con `RACE_SEED`). Solo se puede
-  jugar en modo órbita (tecla **F**); con **R** arranca el cronómetro y hay que atravesar los
-  aros en orden, con **R** otra vez se cancela. Cada mundo tiene su propia forma y color
-  (`RaceTheme`): Themyscira es un círculo liso para aprender, Krypton una estrella de cristal
-  angulosa, Gotham zigzaguea como esquivando edificios, Atlantis ondula como las olas y Oa (el
-  anillo de poder) tiene más puertas y más seguido. La forma sale de variar el radio del
-  circuito con `sin(lobes · ángulo)`, así que sigue siendo 100% procedural y reproducible. Todo
-  pasa en la misma escena, sin pantalla de carga: el aro se genera en el pipeline propio
-  (`Mesh::torus`), se dibuja con un shader animado propio (`RaceGateShader`, con el color del
-  mundo) y la detección de "pasó por el aro" usa la misma técnica anticolisión por tramo que
-  los cristales. Guarda el mejor tiempo de cada mundo mientras dure la partida.
+- **Minijuego por mundo:** cada planeta tiene un reto propio (no el mismo juego repintado),
+  armado en `src/interaction.rs` y reproducible con `RACE_SEED`. Solo se puede jugar en modo
+  órbita (tecla **F**); con **R** arranca y con **R** otra vez se cancela. Todo pasa en la
+  misma escena, sin pantalla de carga ni assets externos: los aros salen de `Mesh::torus` y
+  los peligros/objetivos del mismo octaedro de los cristales, con shaders animados propios
+  (`RaceGateShader`, `HazardShader`, `MarkerShader`) y la detección de "lo tocó" usa la misma
+  técnica anticolisión por tramo que los cristales (`crossed_this_frame`).
+  - **Themyscira** — *circuito de entrenamiento*: cruzar 6 aros en orden, sin reloj.
+  - **Krypton** — *esquiva de cristales*: sobrevivir 18s sin tocar los cristales inestables
+    que flotan alrededor (si tocas uno, falla al instante).
+  - **Gotham** — *patrulla nocturna*: tocar 6 señales sueltas, en cualquier orden, antes de
+    que se acabe el tiempo.
+  - **Atlantis** — *corrientes*: lo mismo que Gotham pero los objetivos se mecen con el
+    tiempo, hay que perseguirlos.
+  - **Oa** — *anillos de energía*: como el circuito de Themyscira pero cada aro se apaga a
+    los 4s si no lo cruzas a tiempo.
+  Guarda la mejor marca de cada mundo mientras dure la partida (el tiempo más bajo en los
+  circuitos y la patrulla, lo que más sobreviviste en la esquiva).
 - Personajes de la Liga en sus mundos (`src/creatures.rs`), cinturón de asteroides y cometa con
   órbita elíptica (`src/exotics.rs`), atmósferas, nubes, llamaradas solares y eclipse de Central
   City sobre Gotham.

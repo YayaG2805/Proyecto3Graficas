@@ -7,7 +7,7 @@ use crate::mesh::{flat_mesh, Mesh};
 use crate::noise::hash01;
 use crate::renderer::{Fragment, FragmentShader, Renderer, Uniforms};
 use crate::scene::Scene;
-use crate::shaders::RaceGateShader;
+use crate::shaders::{HazardShader, MarkerShader, RaceGateShader};
 use crate::ship::{Ship, ShipInput};
 use std::sync::Arc;
 
@@ -39,58 +39,55 @@ const CRYSTAL_RIM_COLOR: Vec3 = Vec3 { x: 1.0, y: 1.0, z: 0.85 };
 const CRYSTAL_BAND_FREQ: f32 = 6.0;
 const CRYSTAL_BAND_SPEED: f32 = 4.0;
 
-// --- carrera de anillos (tecla R): hay q estar en orbita (F) de un mundo pa poder jugarla ---
-// misma semilla = mismo circuito, se puede cambiar en vivo
+// --- minijuegos (tecla R): hay q estar en orbita (F) de un mundo pa poder jugarlos ---
+// cada mundo tiene un reto DISTINTO, no el mismo juego repintado: Themyscira y Oa cruzan aros
+// en orden (Oa con reloj por puerta), Krypton hay q sobrevivir esquivando peligros, y Gotham /
+// Atlantis hay q tocar todos los objetivos sueltos (Atlantis los tiene en movimiento).
+// misma semilla = mismo circuito/peligros/objetivos, se puede cambiar en vivo
 const RACE_SEED: u32 = 83;
-// cuantas puertas tiene un mundo q no esta en `race_theme` (no debería pasar, es el respaldo)
+// cuantos aros tiene un mundo q no esta en `make_world_games` (no debería pasar, es el respaldo)
 const RACE_GATE_COUNT: usize = 6;
-// a q distancia del centro del mundo va el circuito: radio * esto + lo otro
-// bastante mas lejos q los cristales: con el circuito ondulado (RaceTheme::wobble) la puerta
-// mas cerrada todavia tiene q quedar bien afuera de la colision
+// a q distancia del centro del mundo va todo esto: radio * esto + lo otro, bastante mas lejos
+// q los cristales pa q quepa rodeando el planeta sin rozar la superficie
 const RACE_RING_RADII: f32 = 2.2;
 const RACE_RING_EXTRA: f32 = 1.5;
-// q tan inclinado va el eje del circuito respecto a +y, pa q cada mundo se vea distinto
+// q tan inclinado va el eje del circuito/anillo respecto a +y, pa q cada mundo se vea distinto
 const RACE_AXIS_TILT: f32 = 0.5;
 // tamaño del aro sin escalar: radio del circulo central y grosor del tubo
 const RACE_GATE_MAJOR: f32 = 1.0;
 const RACE_GATE_MINOR: f32 = 0.16;
 // el aro mide esto * el radio del planeta
 const RACE_GATE_SCALE_RADII: f32 = 0.5;
-// cuanto margen de mas tiene el agujero pa contar como "pasada", si no es imposible de verdad
+// cuanto margen de mas tiene el agujero de un aro pa contar como "pasada"
 const RACE_PASS_LENIENCY: f32 = 1.5;
-// cuanto dura el mensaje de "carrera terminada" en el hud
+// q tan grandes son los peligros (Krypton) y los objetivos (Gotham/Atlantis), en radios del mundo
+const HAZARD_RADIUS_RADII: f32 = 0.22;
+const TARGET_RADIUS_RADII: f32 = 0.3;
+// q tanto se mecen los objetivos moviles de Atlantis, en radios del mundo
+const TARGET_MOVE_RADII: f32 = 0.5;
+// cuanto dura el mensaje de resultado en el hud
 const RACE_RESULT_SECONDS: f32 = 6.0;
 
-/// la forma y el color del circuito de un mundo: cada héroe vuela distinto.
-/// `lobes` = cuantos "pétalos" tiene el circuito (0 = círculo perfecto) y `wobble` qué tan
-/// marcados son (0 a ~0.3): juntos hacen q el radio del circuito varíe con `sin(lobes * ángulo)`,
-/// asi cada mundo queda con una silueta distinta en vez de ser siempre el mismo círculo.
-struct RaceTheme {
-    lobes: f32,
-    wobble: f32,
-    gate_count: usize,
-    color: Vec3,
+// un vector cualquiera en angulo recto con v, pa armar una base ortonormal
+fn perpendicular(v: Vec3) -> Vec3 {
+    let axis = if v.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
+    v.cross(axis).normalized()
 }
 
-/// el circuito de cada mundo, pensado pa q se sienta distinto segun su héroe:
-/// Themyscira es el mas facil (un círculo liso, para aprender), Krypton es una estrella de
-/// cristal angulosa, Gotham zigzaguea esquivando "edificios", Atlantis ondula como las olas
-/// y Oa (el anillo de poder) tiene mas puertas y mas seguido.
-fn race_theme(name: &str) -> RaceTheme {
-    match name {
-        "Themyscira" => RaceTheme { lobes: 0.0, wobble: 0.0, gate_count: 6, color: Vec3::new(0.55, 0.9, 0.5) },
-        "Krypton" => RaceTheme { lobes: 5.0, wobble: 0.25, gate_count: 6, color: Vec3::new(0.35, 0.65, 1.0) },
-        "Gotham" => RaceTheme { lobes: 8.0, wobble: 0.18, gate_count: 7, color: Vec3::new(1.0, 0.85, 0.25) },
-        "Atlantis" => RaceTheme { lobes: 3.0, wobble: 0.3, gate_count: 6, color: Vec3::new(0.2, 0.75, 0.95) },
-        "Oa" => RaceTheme { lobes: 6.0, wobble: 0.22, gate_count: 8, color: Vec3::new(0.35, 1.0, 0.45) },
-        _ => RaceTheme { lobes: 0.0, wobble: 0.0, gate_count: RACE_GATE_COUNT, color: Vec3::new(1.0, 0.35, 0.65) },
-    }
+// el eje (inclinado distinto en cada mundo) y la base ortonormal q usan los 3 minijuegos pa
+// repartir cosas alrededor del planeta; sale de la semilla, asi q es reproducible
+fn world_axis(body: usize, seed: u32) -> (Vec3, Vec3, Vec3) {
+    let polar = hash01(body as i32, 20, 0, seed) * RACE_AXIS_TILT;
+    let azimuth = hash01(body as i32, 21, 0, seed) * std::f32::consts::TAU;
+    let axis = Vec3::new(polar.sin() * azimuth.cos(), polar.cos(), polar.sin() * azimuth.sin()).normalized();
+    let t1 = perpendicular(axis);
+    let t2 = axis.cross(t1);
+    (axis, t1, t2)
 }
 
 // una puerta del circuito: offset fijo desde el centro del mundo (no rota con el giro del
 // planeta, igual q los cristales) y como esta orientada: la nave la atraviesa por el agujero,
-// en la direccion `forward` (tangente al circuito, por donde se vuela rodeando el planeta).
-// `color` es el del mundo (RaceTheme), asi cada circuito se ve distinto.
+// en la direccion `forward` (tangente al circuito, por donde se vuela rodeando el planeta)
 #[derive(Clone, Copy)]
 struct RaceGate {
     offset: Vec3,
@@ -101,78 +98,262 @@ struct RaceGate {
     color: Vec3,
 }
 
-// un vector cualquiera en angulo recto con v, pa armar una base ortonormal
-fn perpendicular(v: Vec3) -> Vec3 {
-    let axis = if v.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
-    v.cross(axis).normalized()
+/// arma un circuito de aros: el radio varia con `sin(lobes * angulo)` (0 = circulo perfecto,
+/// mas lobulos = silueta de estrella o de flor), asi cada mundo se ve distinto sin dejar de
+/// ser 100% procedural
+fn make_gate_ring(scene: &Scene, body: usize, seed: u32, gate_count: usize, lobes: f32, wobble: f32, color: Vec3) -> Vec<RaceGate> {
+    let b = &scene.bodies[body];
+    let (axis, t1, t2) = world_axis(body, seed);
+    let base_ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
+    let scale = b.radius * RACE_GATE_SCALE_RADII;
+    (0..gate_count)
+        .map(|k| {
+            let a = k as f32 / gate_count as f32 * std::f32::consts::TAU;
+            let shape = (lobes * a).sin();
+            let shape_derivative = lobes * (lobes * a).cos();
+            let r = base_ring * (1.0 + wobble * shape);
+            let dr = base_ring * wobble * shape_derivative;
+            let radial = t1 * a.cos() + t2 * a.sin();
+            let radial_perp = t2 * a.cos() - t1 * a.sin();
+            let offset = radial * r;
+            // la tangente real del circuito (incluyendo q el radio tambien cambia), por donde
+            // hay q volar pa atravesar la puerta de frente
+            let forward = (radial_perp * r + radial * dr).normalized();
+            let right = forward.cross(axis).normalized();
+            RaceGate { offset, right, forward, scale, radius: scale * (RACE_GATE_MAJOR - RACE_GATE_MINOR) * RACE_PASS_LENIENCY, color }
+        })
+        .collect()
 }
 
-// arma el circuito de cada mundo: puertas repartidas parejo alrededor de un circulo cuyo
-// radio varia con `sin(lobes * angulo)` (RaceTheme) y cuyo eje va inclinado distinto en cada
-// mundo; todo sale de la semilla, asi q es reproducible
-fn make_race_tracks(scene: &Scene, seed: u32) -> Vec<Vec<RaceGate>> {
+/// reparte peligros fijos alrededor del mundo, repartidos con hash (no parejo como los aros,
+/// pa q la ruta mas facil no sea obvia)
+fn make_hazards(scene: &Scene, body: usize, seed: u32, count: usize) -> Vec<Vec3> {
+    let b = &scene.bodies[body];
+    let ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
+    (0..count)
+        .map(|k| {
+            let angle = hash01(body as i32, 30 + k as i32, 0, seed) * std::f32::consts::TAU;
+            let tilt = (hash01(body as i32, 30 + k as i32, 1, seed) - 0.5) * 1.2;
+            Vec3::new(angle.cos() * tilt.cos(), tilt.sin(), angle.sin() * tilt.cos()) * ring
+        })
+        .collect()
+}
+
+// un objetivo pa tocar (Gotham/Atlantis): si `move_amount` es 0 se queda quieto, si no se mece
+// de un lado a otro con el tiempo (una corriente, una patrulla que no para)
+#[derive(Clone, Copy)]
+struct CollectTarget {
+    base_offset: Vec3,
+    move_perp: Vec3,
+    move_amount: f32,
+    move_speed: f32,
+    move_phase: f32,
+    radius: f32,
+}
+
+impl CollectTarget {
+    fn offset(&self, t: f32) -> Vec3 {
+        self.base_offset + self.move_perp * (t * self.move_speed + self.move_phase).sin() * self.move_amount
+    }
+}
+
+/// reparte objetivos pa tocar; si `moving` cada uno se mece con su propia fase y velocidad
+fn make_targets(scene: &Scene, body: usize, seed: u32, count: usize, moving: bool) -> Vec<CollectTarget> {
+    let b = &scene.bodies[body];
+    let ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
+    (0..count)
+        .map(|k| {
+            let angle = hash01(body as i32, 40 + k as i32, 0, seed) * std::f32::consts::TAU;
+            let tilt = (hash01(body as i32, 40 + k as i32, 1, seed) - 0.5) * 1.2;
+            let dir = Vec3::new(angle.cos() * tilt.cos(), tilt.sin(), angle.sin() * tilt.cos());
+            CollectTarget {
+                base_offset: dir * ring,
+                move_perp: if moving { perpendicular(dir) } else { Vec3::ZERO },
+                move_amount: if moving { b.radius * TARGET_MOVE_RADII } else { 0.0 },
+                move_speed: 0.5 + hash01(body as i32, 40 + k as i32, 2, seed) * 0.6,
+                move_phase: hash01(body as i32, 40 + k as i32, 3, seed) * std::f32::consts::TAU,
+                radius: b.radius * TARGET_RADIUS_RADII,
+            }
+        })
+        .collect()
+}
+
+/// el reto de un mundo: la configuracion no cambia una vez armada (ver `make_world_games`)
+struct WorldGame {
+    /// como se llama el reto, pa el aviso del hud ("[R] <nombre>")
+    name: &'static str,
+    kind: WorldGameKind,
+}
+
+enum WorldGameKind {
+    /// cruzar los aros en orden; si `gate_deadline` no es None hay q cruzar cada uno antes de
+    /// q se acaben esos segundos desde q se volvio el siguiente, o se falla
+    Gates { gates: Vec<RaceGate>, gate_deadline: Option<f32> },
+    /// no tocar ninguno de los peligros durante `goal_seconds`
+    Survive { hazards: Vec<Vec3>, hazard_radius: f32, goal_seconds: f32 },
+    /// tocar todos los objetivos (en cualquier orden) antes de q se acabe `time_limit`
+    Collect { targets: Vec<CollectTarget>, time_limit: f32, color: Vec3 },
+}
+
+/// arma el reto de cada mundo, pensado pa q se sienta distinto segun su héroe:
+/// Themyscira es el mas facil (cruzar aros en círculo, sin reloj, para aprender), Krypton hay
+/// q sobrevivir esquivando cristales inestables, Gotham hay q tocar las señales de la
+/// patrulla, Atlantis las mismas pero a la deriva con la corriente, y Oa (el anillo de poder)
+/// cruza aros contra el reloj, cada uno con su propia cuenta regresiva
+fn make_world_games(scene: &Scene, seed: u32) -> Vec<Option<WorldGame>> {
     scene
         .bodies
         .iter()
         .enumerate()
         .map(|(i, b)| {
-            // el sol y las lunas no tienen carrera, igual q los cristales
+            // el sol y las lunas no tienen reto, igual q los cristales
             if i < FIRST_WORLD || b.parent.is_some() {
-                return Vec::new();
+                return None;
             }
-            let theme = race_theme(b.name);
-            let polar = hash01(i as i32, 20, 0, seed) * RACE_AXIS_TILT;
-            let azimuth = hash01(i as i32, 21, 0, seed) * std::f32::consts::TAU;
-            let axis = Vec3::new(polar.sin() * azimuth.cos(), polar.cos(), polar.sin() * azimuth.sin()).normalized();
-            let t1 = perpendicular(axis);
-            let t2 = axis.cross(t1);
-            let base_ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
-            let scale = b.radius * RACE_GATE_SCALE_RADII;
-            (0..theme.gate_count)
-                .map(|k| {
-                    let a = k as f32 / theme.gate_count as f32 * std::f32::consts::TAU;
-                    // radio del circuito en este angulo: circulo perfecto si wobble = 0, si no
-                    // "respira" con sin(lobes * a) y da una silueta de flor o de estrella
-                    let shape = (theme.lobes * a).sin();
-                    let shape_derivative = theme.lobes * (theme.lobes * a).cos();
-                    let r = base_ring * (1.0 + theme.wobble * shape);
-                    let dr = base_ring * theme.wobble * shape_derivative;
-                    let radial = t1 * a.cos() + t2 * a.sin();
-                    // derivada de `radial` respecto al angulo: hacia donde se mueve al crecer a
-                    let radial_perp = t2 * a.cos() - t1 * a.sin();
-                    let offset = radial * r;
-                    // la tangente real del circuito (incluyendo q el radio tambien cambia),
-                    // por donde hay q volar pa atravesar la puerta de frente
-                    let forward = (radial_perp * r + radial * dr).normalized();
-                    let right = forward.cross(axis).normalized();
-                    RaceGate {
-                        offset,
-                        right,
-                        forward,
-                        scale,
-                        radius: scale * (RACE_GATE_MAJOR - RACE_GATE_MINOR) * RACE_PASS_LENIENCY,
-                        color: theme.color,
-                    }
-                })
-                .collect()
+            Some(match b.name {
+                "Themyscira" => WorldGame {
+                    name: "circuito de entrenamiento",
+                    kind: WorldGameKind::Gates { gates: make_gate_ring(scene, i, seed, 6, 0.0, 0.0, Vec3::new(0.55, 0.9, 0.5)), gate_deadline: None },
+                },
+                "Krypton" => WorldGame {
+                    name: "esquiva de cristales",
+                    kind: WorldGameKind::Survive { hazards: make_hazards(scene, i, seed, 10), hazard_radius: b.radius * HAZARD_RADIUS_RADII, goal_seconds: 18.0 },
+                },
+                "Gotham" => WorldGame {
+                    name: "patrulla nocturna",
+                    kind: WorldGameKind::Collect { targets: make_targets(scene, i, seed, 6, false), time_limit: 25.0, color: Vec3::new(1.0, 0.85, 0.25) },
+                },
+                "Atlantis" => WorldGame {
+                    name: "corrientes de Atlantis",
+                    kind: WorldGameKind::Collect { targets: make_targets(scene, i, seed, 6, true), time_limit: 28.0, color: Vec3::new(0.2, 0.75, 0.95) },
+                },
+                "Oa" => WorldGame {
+                    name: "anillos de energia",
+                    kind: WorldGameKind::Gates { gates: make_gate_ring(scene, i, seed, 8, 6.0, 0.22, Vec3::new(0.35, 1.0, 0.45)), gate_deadline: Some(4.0) },
+                },
+                _ => WorldGame {
+                    name: "circuito de anillos",
+                    kind: WorldGameKind::Gates { gates: make_gate_ring(scene, i, seed, RACE_GATE_COUNT, 0.0, 0.0, Vec3::new(1.0, 0.35, 0.65)), gate_deadline: None },
+                },
+            })
         })
         .collect()
 }
 
-// la carrera en curso
-#[derive(Clone, Copy)]
-struct ActiveRace {
-    body: usize,
-    next_gate: usize,
-    elapsed: f32,
+// revisa si la nave cruzo el punto `target` en este cuadro: reviso todo el tramo q recorrio,
+// no solo donde quedo, pa no saltarnos nada a mucha velocidad o con pocos fps (mismo truco de
+// pick_up). Sirve pa "pasar por un aro", "tocar un objetivo" y "chocar con un peligro".
+fn crossed_this_frame(ship: &Ship, dt: f32, target: Vec3, radius: f32) -> bool {
+    let previous = ship.position - ship.velocity * dt;
+    let path = ship.position - previous;
+    let length_squared = path.dot(path).max(1e-6);
+    let along = ((target - previous).dot(path) / length_squared).clamp(0.0, 1.0);
+    let closest = previous + path * along;
+    (target - closest).length() < radius
 }
 
-/// el resultado de la ultima carrera terminada, pa mostrarlo un rato en el hud
-#[derive(Clone, Copy)]
-pub struct RaceResult {
+// el minijuego en curso: cada variante trae el estado q le hace falta a su mecanica
+enum ActiveMinigame {
+    Gates { body: usize, next: usize, elapsed: f32, gate_elapsed: f32 },
+    Survive { body: usize, elapsed: f32 },
+    Collect { body: usize, touched: Vec<bool>, elapsed: f32, remaining: f32 },
+}
+
+impl ActiveMinigame {
+    fn body(&self) -> usize {
+        match self {
+            ActiveMinigame::Gates { body, .. } => *body,
+            ActiveMinigame::Survive { body, .. } => *body,
+            ActiveMinigame::Collect { body, .. } => *body,
+        }
+    }
+
+    fn start(body: usize, game: &WorldGame) -> ActiveMinigame {
+        match &game.kind {
+            WorldGameKind::Gates { .. } => ActiveMinigame::Gates { body, next: 0, elapsed: 0.0, gate_elapsed: 0.0 },
+            WorldGameKind::Survive { .. } => ActiveMinigame::Survive { body, elapsed: 0.0 },
+            WorldGameKind::Collect { targets, time_limit, .. } => {
+                ActiveMinigame::Collect { body, touched: vec![false; targets.len()], elapsed: 0.0, remaining: *time_limit }
+            }
+        }
+    }
+}
+
+/// lo q paso al avanzar un cuadro: listo (sigue jugandose) o terminado (con si se gano y el
+/// mensaje pal hud)
+enum StepOutcome {
+    Ongoing,
+    Done { success: bool, text: String },
+}
+
+fn step_gates(ship: &Ship, scene: &Scene, body: usize, gates: &[RaceGate], deadline: Option<f32>, next: &mut usize, elapsed: &mut f32, gate_elapsed: &mut f32, t: f32, dt: f32) -> StepOutcome {
+    *elapsed += dt;
+    *gate_elapsed += dt;
+    if let Some(limit) = deadline {
+        if *gate_elapsed > limit {
+            return StepOutcome::Done { success: false, text: format!("se apago el aro {}: intentalo de nuevo", *next + 1) };
+        }
+    }
+    if let Some(gate) = gates.get(*next) {
+        let target = scene.body_position(body, t) + gate.offset;
+        if crossed_this_frame(ship, dt, target, gate.radius) {
+            *next += 1;
+            *gate_elapsed = 0.0;
+        }
+    }
+    if *next >= gates.len() {
+        StepOutcome::Done { success: true, text: format!("circuito completo en {:.1}s", *elapsed) }
+    } else {
+        StepOutcome::Ongoing
+    }
+}
+
+fn step_survive(ship: &Ship, scene: &Scene, body: usize, hazards: &[Vec3], hazard_radius: f32, goal: f32, elapsed: &mut f32, t: f32, dt: f32) -> StepOutcome {
+    *elapsed += dt;
+    let center = scene.body_position(body, t);
+    for h in hazards {
+        if crossed_this_frame(ship, dt, center + *h, hazard_radius) {
+            return StepOutcome::Done { success: false, text: "chocaste con un cristal inestable: intentalo de nuevo".to_string() };
+        }
+    }
+    if *elapsed >= goal {
+        StepOutcome::Done { success: true, text: format!("sobreviviste {goal:.0}s esquivando los cristales") }
+    } else {
+        StepOutcome::Ongoing
+    }
+}
+
+fn step_collect(ship: &Ship, scene: &Scene, body: usize, targets: &[CollectTarget], touched: &mut [bool], elapsed: &mut f32, remaining: &mut f32, t: f32, dt: f32) -> StepOutcome {
+    *elapsed += dt;
+    *remaining -= dt;
+    let center = scene.body_position(body, t);
+    for (k, target) in targets.iter().enumerate() {
+        if !touched[k] && crossed_this_frame(ship, dt, center + target.offset(t), target.radius) {
+            touched[k] = true;
+        }
+    }
+    if touched.iter().all(|&done| done) {
+        StepOutcome::Done { success: true, text: format!("tocaste todos los objetivos en {:.1}s", *elapsed) }
+    } else if *remaining <= 0.0 {
+        StepOutcome::Done { success: false, text: "se acabo el tiempo: faltaron objetivos por tocar".to_string() }
+    } else {
+        StepOutcome::Ongoing
+    }
+}
+
+/// el resultado del ultimo minijuego terminado, pa mostrarlo un rato en el hud
+#[derive(Clone)]
+pub struct MinigameResult {
     pub body: usize,
-    pub time: f32,
-    pub best: bool,
+    pub success: bool,
+    pub text: String,
+}
+
+/// lo q el hud necesita pa mostrar el progreso del minijuego en curso
+pub enum MinigameHud {
+    Gates { next: usize, total: usize, elapsed: f32, gate_left: Option<f32> },
+    Survive { elapsed: f32, goal: f32 },
+    Collect { touched: usize, total: usize, remaining: f32 },
 }
 
 // un cristal flotando cerca de un mundo
@@ -275,17 +456,20 @@ pub struct GameState {
     crystal_lods: Vec<Mesh>,
     crystal_shader: Arc<dyn FragmentShader>,
 
-    // --- carrera de anillos ---
-    /// la carrera en curso, None = no se esta jugando
-    race: Option<ActiveRace>,
-    /// el circuito de cada mundo (vacio en el sol y las lunas)
-    race_tracks: Vec<Vec<RaceGate>>,
-    /// mejor tiempo logrado en cada mundo, None = todavia no se completa ninguna
+    // --- minijuegos por mundo ---
+    /// el minijuego en curso, None = no se esta jugando ninguno
+    active: Option<ActiveMinigame>,
+    /// el reto de cada mundo (None en el sol y las lunas)
+    world_games: Vec<Option<WorldGame>>,
+    /// mejor marca lograda en cada mundo, None = todavia no se completa ninguna
     pub race_best: Vec<Option<f32>>,
-    /// el resultado de la ultima carrera terminada, pa mostrarlo un rato en el hud
-    pub race_result: Option<RaceResult>,
+    /// el resultado del ultimo minijuego terminado, pa mostrarlo un rato en el hud
+    pub race_result: Option<MinigameResult>,
     race_result_timer: f32,
-    race_gate_mesh: Mesh,
+    // mallas q comparten todos los minijuegos pa dibujarse: el aro (Gates) y el marcador
+    // generico (Survive/Collect), distinguidos solo por su shader y su color
+    gate_mesh: Mesh,
+    marker_mesh: Mesh,
 }
 
 impl GameState {
@@ -305,27 +489,64 @@ impl GameState {
             collectibles,
             crystal_lods: vec![crystal_mesh()],
             crystal_shader: Arc::new(CrystalShader),
-            race: None,
-            race_tracks: make_race_tracks(scene, RACE_SEED),
+            active: None,
+            world_games: make_world_games(scene, RACE_SEED),
             race_best: vec![None; scene.bodies.len()],
             race_result: None,
             race_result_timer: 0.0,
-            race_gate_mesh: Mesh::torus(RACE_GATE_MAJOR, RACE_GATE_MINOR, 24, 10),
+            gate_mesh: Mesh::torus(RACE_GATE_MAJOR, RACE_GATE_MINOR, 24, 10),
+            marker_mesh: crystal_mesh(),
         }
     }
 
-    /// si hay carrera: el mundo, cuantas puertas lleva, cuantas hay en total y cuanto tiempo lleva
-    pub fn race_progress(&self) -> Option<(usize, usize, usize, f32)> {
-        self.race.map(|a| (a.body, a.next_gate, self.race_tracks[a.body].len(), a.elapsed))
+    /// si el mundo i tiene un reto (el sol y las lunas no), y como se llama, pa el aviso del hud
+    pub fn minigame_name(&self, body: usize) -> Option<&'static str> {
+        self.world_games[body].as_ref().map(|g| g.name)
     }
 
-    /// si el mundo i tiene circuito de carrera (el sol y las lunas no), pa el aviso del hud
-    pub fn has_race_track(&self, body: usize) -> bool {
-        !self.race_tracks[body].is_empty()
+    /// lo q el hud necesita pa mostrar el minijuego en curso
+    pub fn minigame_hud(&self) -> Option<(usize, MinigameHud)> {
+        let active = self.active.as_ref()?;
+        let body = active.body();
+        match (active, &self.world_games[body].as_ref()?.kind) {
+            (ActiveMinigame::Gates { next, elapsed, gate_elapsed, .. }, WorldGameKind::Gates { gates, gate_deadline }) => {
+                Some((body, MinigameHud::Gates { next: *next, total: gates.len(), elapsed: *elapsed, gate_left: gate_deadline.map(|d| (d - gate_elapsed).max(0.0)) }))
+            }
+            (ActiveMinigame::Survive { elapsed, .. }, WorldGameKind::Survive { goal_seconds, .. }) => Some((body, MinigameHud::Survive { elapsed: *elapsed, goal: *goal_seconds })),
+            (ActiveMinigame::Collect { touched, remaining, .. }, WorldGameKind::Collect { .. }) => {
+                Some((body, MinigameHud::Collect { touched: touched.iter().filter(|&&x| x).count(), total: touched.len(), remaining: (*remaining).max(0.0) }))
+            }
+            _ => None,
+        }
     }
 
-    /// cambia la carrera segun la tecla R y el estado de la orbita
-    fn update_race(&mut self, ship: &Ship, scene: &Scene, race_toggle: bool, t: f32, dt: f32) {
+    // cuando el minijuego termina, guarda la mejor marca: tiempo mas bajo en Gates/Collect,
+    // mas tiempo sobrevivido en Survive (cuenta aunque se falle, asi anima a volver a intentar)
+    fn update_best(&mut self, body: usize, active: &ActiveMinigame, success: bool) {
+        let metric = match active {
+            ActiveMinigame::Gates { elapsed, .. } if success => Some((*elapsed, true)),
+            ActiveMinigame::Collect { elapsed, .. } if success => Some((*elapsed, true)),
+            ActiveMinigame::Survive { elapsed, .. } => Some((*elapsed, false)),
+            _ => None,
+        };
+        let Some((value, lower_is_better)) = metric else { return };
+        let better = match self.race_best[body] {
+            None => true,
+            Some(best) => {
+                if lower_is_better {
+                    value < best
+                } else {
+                    value > best
+                }
+            }
+        };
+        if better {
+            self.race_best[body] = Some(value);
+        }
+    }
+
+    /// cambia el minijuego segun la tecla R y el estado de la orbita, y avanza el q este en curso
+    fn update_minigame(&mut self, ship: &Ship, scene: &Scene, toggle: bool, t: f32, dt: f32) {
         if self.race_result_timer > 0.0 {
             self.race_result_timer -= dt;
             if self.race_result_timer <= 0.0 {
@@ -333,66 +554,78 @@ impl GameState {
             }
         }
 
-        // si se solto la orbita de ese mundo (F, warp, explosion...) la carrera se cancela sola
-        if let Some(active) = self.race {
-            if ship.orbit_body() != Some(active.body) {
-                self.race = None;
+        // si se solto la orbita de ese mundo (F, warp, explosion...) el minijuego se cancela solo
+        if let Some(active) = &self.active {
+            if ship.orbit_body() != Some(active.body()) {
+                self.active = None;
             }
         }
 
-        // R: si ya estamos corriendo la cancela; si no, la empieza (solo estando en orbita
-        // de un mundo con circuito, el sol y las lunas no tienen)
-        if race_toggle {
-            self.race = if self.race.is_some() {
+        // R: si ya estamos jugando lo cancela; si no, lo empieza (solo estando en orbita de un
+        // mundo con reto, el sol y las lunas no tienen)
+        if toggle {
+            self.active = if self.active.is_some() {
                 None
             } else {
-                ship.orbit_body().filter(|&i| !self.race_tracks[i].is_empty()).map(|i| ActiveRace { body: i, next_gate: 0, elapsed: 0.0 })
+                ship.orbit_body().and_then(|body| self.world_games[body].as_ref().map(|game| ActiveMinigame::start(body, game)))
             };
         }
 
-        let Some(mut active) = self.race else { return };
-        active.elapsed += dt;
-        let gates = &self.race_tracks[active.body];
-        if let Some(gate) = gates.get(active.next_gate) {
-            // mismo truco q pick_up: reviso todo el tramo q recorrio la nave este cuadro, no
-            // solo donde quedo, pa no saltarnos la puerta a mucha velocidad o con pocos fps
-            let target = scene.body_position(active.body, t) + gate.offset;
-            let previous = ship.position - ship.velocity * dt;
-            let path = ship.position - previous;
-            let length_squared = path.dot(path).max(1e-6);
-            let along = ((target - previous).dot(path) / length_squared).clamp(0.0, 1.0);
-            let closest = previous + path * along;
-            if (target - closest).length() < gate.radius {
-                active.next_gate += 1;
+        let Some(mut active) = self.active.take() else { return };
+        let body = active.body();
+        let outcome = match (&mut active, &self.world_games[body].as_ref().expect("un minijuego activo siempre tiene su reto").kind) {
+            (ActiveMinigame::Gates { next, elapsed, gate_elapsed, .. }, WorldGameKind::Gates { gates, gate_deadline }) => {
+                step_gates(ship, scene, body, gates, *gate_deadline, next, elapsed, gate_elapsed, t, dt)
             }
-        }
+            (ActiveMinigame::Survive { elapsed, .. }, WorldGameKind::Survive { hazards, hazard_radius, goal_seconds }) => {
+                step_survive(ship, scene, body, hazards, *hazard_radius, *goal_seconds, elapsed, t, dt)
+            }
+            (ActiveMinigame::Collect { touched, elapsed, remaining, .. }, WorldGameKind::Collect { targets, .. }) => step_collect(ship, scene, body, targets, touched, elapsed, remaining, t, dt),
+            _ => StepOutcome::Ongoing,
+        };
 
-        if active.next_gate >= gates.len() {
-            let improved = match self.race_best[active.body] {
-                Some(best) => active.elapsed < best,
-                None => true,
-            };
-            if improved {
-                self.race_best[active.body] = Some(active.elapsed);
+        match outcome {
+            StepOutcome::Done { success, text } => {
+                self.update_best(body, &active, success);
+                self.race_result = Some(MinigameResult { body, success, text });
+                self.race_result_timer = RACE_RESULT_SECONDS;
+                self.active = None;
             }
-            self.race_result = Some(RaceResult { body: active.body, time: active.elapsed, best: improved });
-            self.race_result_timer = RACE_RESULT_SECONDS;
-            self.race = None;
-        } else {
-            self.race = Some(active);
+            StepOutcome::Ongoing => self.active = Some(active),
         }
     }
 
-    /// dibuja las puertas q faltan de la carrera en curso, va en Game::draw_geometry
+    /// dibuja lo q falte del minijuego en curso, va en Game::draw_geometry
     pub fn draw_race(&self, r: &mut Renderer, scene: &Scene, t: f32) {
-        let Some(active) = self.race else { return };
-        let gates = &self.race_tracks[active.body];
-        let center = scene.body_position(active.body, t);
-        for (k, gate) in gates.iter().enumerate().skip(active.next_gate) {
-            let up = gate.right.cross(gate.forward);
-            let model = Mat4::from_basis(gate.right, up, gate.forward, center + gate.offset) * Mat4::scale(Vec3::splat(gate.scale));
-            let shader: Arc<dyn FragmentShader> = Arc::new(RaceGateShader { color: gate.color, next: k == active.next_gate });
-            r.draw_mesh_additive(&self.race_gate_mesh, &model, shader);
+        let Some(active) = &self.active else { return };
+        let body = active.body();
+        let Some(game) = &self.world_games[body] else { return };
+        let center = scene.body_position(body, t);
+        match (active, &game.kind) {
+            (ActiveMinigame::Gates { next, .. }, WorldGameKind::Gates { gates, .. }) => {
+                for (k, gate) in gates.iter().enumerate().skip(*next) {
+                    let up = gate.right.cross(gate.forward);
+                    let model = Mat4::from_basis(gate.right, up, gate.forward, center + gate.offset) * Mat4::scale(Vec3::splat(gate.scale));
+                    let shader: Arc<dyn FragmentShader> = Arc::new(RaceGateShader { color: gate.color, next: k == *next });
+                    r.draw_mesh_additive(&self.gate_mesh, &model, shader);
+                }
+            }
+            (ActiveMinigame::Survive { .. }, WorldGameKind::Survive { hazards, hazard_radius, .. }) => {
+                for h in hazards {
+                    let model = Mat4::translation(center + *h) * Mat4::rotation_y(t * 1.5) * Mat4::scale(Vec3::splat(*hazard_radius));
+                    r.draw_mesh_additive(&self.marker_mesh, &model, Arc::new(HazardShader));
+                }
+            }
+            (ActiveMinigame::Collect { touched, .. }, WorldGameKind::Collect { targets, color, .. }) => {
+                for (k, target) in targets.iter().enumerate() {
+                    if touched[k] {
+                        continue;
+                    }
+                    let model = Mat4::translation(center + target.offset(t)) * Mat4::rotation_y(t * 2.0) * Mat4::scale(Vec3::splat(target.radius * 0.6));
+                    r.draw_mesh_additive(&self.marker_mesh, &model, Arc::new(MarkerShader { color: *color }));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -525,9 +758,9 @@ pub fn update(state: &mut GameState, ship: &mut Ship, scene: &Scene, input: &Shi
         state.pick_up(ship, scene, t, dt);
     }
 
-    // paso 6.5: la carrera de anillos, solo se puede jugar en orbita: primero F, despues R
+    // paso 6.5: el minijuego del mundo, solo se puede jugar en orbita: primero F, despues R
     if !state.photo_mode {
-        state.update_race(ship, scene, input.race_toggle, t, dt);
+        state.update_minigame(ship, scene, input.race_toggle, t, dt);
     }
 
     // paso 7: con P entramos o salimos del modo foto
@@ -865,6 +1098,10 @@ mod tests {
         assert!(!state.photo_mode);
     }
 
+    fn body_named(scene: &Scene, name: &str) -> usize {
+        scene.bodies.iter().position(|b| b.name == name).unwrap_or_else(|| panic!("falta {name}"))
+    }
+
     #[test]
     fn la_r_no_hace_nada_sin_estar_en_orbita() {
         let scene = Scene::new();
@@ -872,11 +1109,11 @@ mod tests {
         let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 10.0);
         let race = ShipInput { race_toggle: true, ..Default::default() };
         update(&mut state, &mut ship, &scene, &race, 0.0, 0.016);
-        assert!(state.race_progress().is_none());
+        assert!(state.minigame_hud().is_none());
     }
 
     #[test]
-    fn la_r_empieza_la_carrera_en_orbita_y_otra_r_la_cancela() {
+    fn la_r_empieza_el_minijuego_en_orbita_y_otra_r_lo_cancela() {
         let scene = Scene::new();
         let mut state = GameState::new(&scene);
         let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 2.0);
@@ -888,17 +1125,22 @@ mod tests {
         assert_eq!(state.orbit_lock, Some(1));
 
         tick(&mut state, &mut ship, &race);
-        let (body, next, total, _) = state.race_progress().expect("deberia haber carrera en curso");
+        let (body, hud) = state.minigame_hud().expect("deberia haber un minijuego en curso");
         assert_eq!(body, 1);
-        assert_eq!(next, 0);
-        assert_eq!(total, RACE_GATE_COUNT);
+        match hud {
+            MinigameHud::Gates { next, total, .. } => {
+                assert_eq!(next, 0);
+                assert_eq!(total, 6); // Themyscira: circuito de entrenamiento
+            }
+            _ => panic!("Themyscira deberia ser un circuito de aros"),
+        }
 
         tick(&mut state, &mut ship, &race);
-        assert!(state.race_progress().is_none());
+        assert!(state.minigame_hud().is_none());
     }
 
     #[test]
-    fn soltar_la_orbita_cancela_la_carrera_en_curso() {
+    fn soltar_la_orbita_cancela_el_minijuego_en_curso() {
         let scene = Scene::new();
         let mut state = GameState::new(&scene);
         let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 2.0);
@@ -908,83 +1150,198 @@ mod tests {
 
         tick(&mut state, &mut ship, &orbit);
         tick(&mut state, &mut ship, &race);
-        assert!(state.race_progress().is_some());
+        assert!(state.minigame_hud().is_some());
 
         tick(&mut state, &mut ship, &orbit); // F otra vez: suelta la orbita
         assert_eq!(ship.orbit_body(), None);
         tick(&mut state, &mut ship, &ShipInput::default());
-        assert!(state.race_progress().is_none(), "sin orbita la carrera se tiene q cancelar sola");
+        assert!(state.minigame_hud().is_none(), "sin orbita el minijuego se tiene q cancelar solo");
     }
 
     #[test]
-    fn pasar_las_puertas_en_orden_termina_la_carrera_y_guarda_el_mejor_tiempo() {
+    fn pasar_los_aros_en_orden_termina_el_circuito_y_guarda_el_mejor_tiempo() {
         let scene = Scene::new();
         let mut state = GameState::new(&scene);
         let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 2.0);
         let dt = 1.0 / 60.0;
         update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, dt);
         update(&mut state, &mut ship, &scene, &ShipInput { race_toggle: true, ..Default::default() }, 0.0, dt);
-        assert!(state.race_progress().is_some());
+        assert!(state.minigame_hud().is_some());
         assert_eq!(state.race_best[1], None);
 
-        let track = &make_race_tracks(&scene, RACE_SEED)[1];
+        let gates = make_gate_ring(&scene, 1, RACE_SEED, 6, 0.0, 0.0, Vec3::ZERO);
         let mut t = 0.0;
-        for gate in track {
+        for gate in &gates {
             let target = scene.body_position(1, t) + gate.offset;
-            // la "teletransporto" justo cruzando la puerta, pa probar q cada una avanza la carrera
+            // la "teletransporto" justo cruzando el aro, pa probar q cada uno avanza el circuito
             ship.position = target - gate.forward * 0.1;
             ship.velocity = gate.forward * 50.0;
             t += dt;
             update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
         }
-        assert!(state.race_progress().is_none(), "con todas las puertas la carrera ya deberia haber terminado");
-        let result = state.race_result.expect("deberia quedar un resultado");
+        assert!(state.minigame_hud().is_none(), "con todos los aros el circuito ya deberia haber terminado");
+        let result = state.race_result.as_ref().expect("deberia quedar un resultado");
         assert_eq!(result.body, 1);
-        assert!(result.best);
-        assert_eq!(state.race_best[1], Some(result.time));
+        assert!(result.success);
+        assert!(state.race_best[1].is_some_and(|best| best > 0.0));
     }
 
     #[test]
-    fn la_misma_semilla_da_el_mismo_circuito() {
+    fn tocar_un_peligro_en_krypton_falla_la_esquiva() {
         let scene = Scene::new();
-        let a = make_race_tracks(&scene, RACE_SEED);
-        let b = make_race_tracks(&scene, RACE_SEED);
-        let other = make_race_tracks(&scene, RACE_SEED + 1);
+        let krypton = body_named(&scene, "Krypton");
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, krypton, scene.bodies[krypton].radius * 2.0);
+        let dt = 1.0 / 60.0;
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, dt);
+        update(&mut state, &mut ship, &scene, &ShipInput { race_toggle: true, ..Default::default() }, 0.0, dt);
+        assert!(matches!(state.minigame_hud(), Some((_, MinigameHud::Survive { .. }))));
 
-        assert_eq!(a[1].len(), RACE_GATE_COUNT);
-        for k in 0..a[1].len() {
-            assert_eq!((a[1][k].offset - b[1][k].offset).length(), 0.0);
-        }
-        let moved = (0..a[1].len()).filter(|&k| (a[1][k].offset - other[1][k].offset).length() > 0.5).count();
-        assert!(moved > 0, "otra semilla deberia mover el circuito");
+        let hazards = make_hazards(&scene, krypton, RACE_SEED, 10);
+        let target = scene.body_position(krypton, 0.0) + hazards[0];
+        ship.position = target - Vec3::new(1.0, 0.0, 0.0) * 0.1;
+        ship.velocity = Vec3::new(1.0, 0.0, 0.0) * 50.0;
+        update(&mut state, &mut ship, &scene, &ShipInput::default(), dt, dt);
 
-        // el sol y las lunas no tienen circuito
-        assert!(a[0].is_empty());
-        let central_city = scene.bodies.iter().position(|b| b.name == "Central City").unwrap();
-        assert!(a[central_city].is_empty());
+        assert!(state.minigame_hud().is_none(), "al tocar un peligro la esquiva se tiene q cancelar");
+        let result = state.race_result.as_ref().expect("deberia quedar un resultado de fallo");
+        assert!(!result.success);
+        // igual guarda cuanto duro, pa animar a intentarlo de nuevo
+        assert!(state.race_best[krypton].is_some());
     }
 
     #[test]
-    fn el_circuito_de_cada_mundo_queda_lejos_de_la_colision_y_se_ve_distinto() {
+    fn sobrevivir_el_tiempo_completo_en_krypton_termina_con_exito() {
         let scene = Scene::new();
-        let tracks = make_race_tracks(&scene, RACE_SEED);
-        for world in 1..=5 {
-            let floor = collision_radius(scene.bodies[world].radius);
-            for gate in &tracks[world] {
-                assert!(
-                    gate.offset.length() > floor + 1.0,
-                    "{} tiene una puerta a {:.2} de distancia, muy cerca de la colision en {:.2}",
-                    scene.bodies[world].name,
-                    gate.offset.length(),
-                    floor
-                );
+        let krypton = body_named(&scene, "Krypton");
+        let radius = scene.bodies[krypton].radius;
+        let mut state = GameState::new(&scene);
+        // bien lejos del anillo de peligros (2.2 radios + 1.5), pa no tocar ninguno sin querer
+        let mut ship = ship_above(&scene, krypton, radius * 2.0);
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0;
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, t, dt);
+        t += dt;
+        update(&mut state, &mut ship, &scene, &ShipInput { race_toggle: true, ..Default::default() }, t, dt);
+        assert!(state.minigame_hud().is_some());
+
+        for _ in 0..1300 {
+            t += dt;
+            update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
+            if state.minigame_hud().is_none() {
+                break;
             }
         }
-        // cada mundo tiene su propio color de circuito (RaceTheme)
-        let colors: Vec<Vec3> = (1..=5).map(|w| tracks[w][0].color).collect();
-        for a in 0..colors.len() {
-            for b in (a + 1)..colors.len() {
-                assert!((colors[a] - colors[b]).length() > 0.05, "dos mundos comparten el color de su carrera");
+        let result = state.race_result.as_ref().expect("la esquiva deberia haber terminado");
+        assert!(result.success, "{}", result.text);
+    }
+
+    #[test]
+    fn tocar_todos_los_objetivos_en_gotham_termina_la_patrulla() {
+        let scene = Scene::new();
+        let gotham = body_named(&scene, "Gotham");
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, gotham, scene.bodies[gotham].radius * 2.0);
+        let dt = 1.0 / 60.0;
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, dt);
+        update(&mut state, &mut ship, &scene, &ShipInput { race_toggle: true, ..Default::default() }, 0.0, dt);
+        assert!(matches!(state.minigame_hud(), Some((_, MinigameHud::Collect { .. }))));
+
+        let targets = make_targets(&scene, gotham, RACE_SEED, 6, false);
+        let mut t = 0.0;
+        for target in &targets {
+            let world_pos = scene.body_position(gotham, t) + target.offset(t);
+            ship.position = world_pos - Vec3::new(0.0, 1.0, 0.0) * 0.1;
+            ship.velocity = Vec3::new(0.0, 1.0, 0.0) * 50.0;
+            t += dt;
+            update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
+        }
+        assert!(state.minigame_hud().is_none(), "con todos los objetivos tocados la patrulla ya deberia haber terminado");
+        let result = state.race_result.as_ref().expect("deberia quedar un resultado");
+        assert!(result.success, "{}", result.text);
+    }
+
+    #[test]
+    fn se_le_acaba_el_tiempo_a_un_aro_en_oa_y_falla() {
+        let scene = Scene::new();
+        let oa = body_named(&scene, "Oa");
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, oa, scene.bodies[oa].radius * 2.0);
+        let dt = 1.0 / 60.0;
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, dt);
+        update(&mut state, &mut ship, &scene, &ShipInput { race_toggle: true, ..Default::default() }, 0.0, dt);
+        assert!(matches!(state.minigame_hud(), Some((_, MinigameHud::Gates { gate_left: Some(_), .. }))), "Oa deberia tener reloj por aro");
+
+        // dejo pasar mas de los 4s del primer aro sin acercarme
+        let mut t = 0.0;
+        for _ in 0..300 {
+            t += dt;
+            update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
+            if state.minigame_hud().is_none() {
+                break;
+            }
+        }
+        let result = state.race_result.as_ref().expect("deberia haber fallado por tiempo");
+        assert!(!result.success, "{}", result.text);
+    }
+
+    #[test]
+    fn cada_mundo_tiene_un_reto_distinto() {
+        let scene = Scene::new();
+        let names: Vec<&str> = ["Themyscira", "Krypton", "Gotham", "Atlantis", "Oa"]
+            .iter()
+            .map(|&n| {
+                let i = body_named(&scene, n);
+                GameState::new(&scene).minigame_name(i).expect("todos los mundos tienen reto")
+            })
+            .collect();
+        for a in 0..names.len() {
+            for b in (a + 1)..names.len() {
+                assert_ne!(names[a], names[b], "dos mundos comparten el nombre de su minijuego");
+            }
+        }
+        // el sol y las lunas no tienen reto
+        let state = GameState::new(&scene);
+        assert!(state.minigame_name(0).is_none());
+        let central_city = body_named(&scene, "Central City");
+        assert!(state.minigame_name(central_city).is_none());
+    }
+
+    #[test]
+    fn la_misma_semilla_da_el_mismo_reto() {
+        let scene = Scene::new();
+        let krypton = body_named(&scene, "Krypton");
+        let gotham = body_named(&scene, "Gotham");
+
+        let a = make_hazards(&scene, krypton, RACE_SEED, 10);
+        let b = make_hazards(&scene, krypton, RACE_SEED, 10);
+        let other = make_hazards(&scene, krypton, RACE_SEED + 1, 10);
+        for k in 0..a.len() {
+            assert_eq!((a[k] - b[k]).length(), 0.0);
+        }
+        assert!((0..a.len()).any(|k| (a[k] - other[k]).length() > 0.5), "otra semilla deberia mover los peligros");
+
+        let ta = make_targets(&scene, gotham, RACE_SEED, 6, false);
+        let tb = make_targets(&scene, gotham, RACE_SEED, 6, false);
+        for k in 0..ta.len() {
+            assert_eq!((ta[k].base_offset - tb[k].base_offset).length(), 0.0);
+        }
+    }
+
+    #[test]
+    fn todo_lo_generado_queda_lejos_de_la_colision() {
+        let scene = Scene::new();
+        for world in 1..=5 {
+            let floor = collision_radius(scene.bodies[world].radius);
+            let name = scene.bodies[world].name;
+            for gate in make_gate_ring(&scene, world, RACE_SEED, 6, 5.0, 0.3, Vec3::ZERO) {
+                assert!(gate.offset.length() > floor + 1.0, "{name} tiene un aro cerca de la colision");
+            }
+            for hazard in make_hazards(&scene, world, RACE_SEED, 10) {
+                assert!(hazard.length() > floor + 1.0, "{name} tiene un peligro cerca de la colision");
+            }
+            for target in make_targets(&scene, world, RACE_SEED, 6, true) {
+                assert!(target.base_offset.length() > floor + 1.0, "{name} tiene un objetivo cerca de la colision");
             }
         }
     }

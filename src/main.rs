@@ -1041,7 +1041,7 @@ fn main() {
                 draw_centered!(d, "un recorrido por los mundos de la Liga", y - 128, 26, Color::GOLD);
                 draw_centered!(d, "Renderer por software  -  Graficas por Computadora 2026", y - 92, 20, Color::LIGHTGRAY);
                 draw_centered!(d, "W/S acelerar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar", y - 20, 18, Color::SKYBLUE);
-                draw_centered!(d, "F orbita   R carrera   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda   K portal", y + 6, 18, Color::SKYBLUE);
+                draw_centered!(d, "F orbita   R minijuego   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda   K portal", y + 6, 18, Color::SKYBLUE);
                 if (game.time * 3.0).sin() > -0.4 {
                     draw_centered!(d, "ENTER para empezar", y + 90, 34, Color::RAYWHITE);
                 }
@@ -1114,30 +1114,35 @@ fn main() {
                     }
                 }
 
-                // Carrera de anillos: progreso si está en curso, si no un aviso para empezarla
-                // (solo se puede en órbita) y, al terminar, cuánto tardó.
-                if let Some((body, next_gate, total, elapsed)) = game.state.race_progress() {
+                // Minijuego del mundo: distinto segun el mundo (circuito de aros, esquiva de
+                // peligros o tocar objetivos). Progreso si esta en curso, si no un aviso para
+                // empezarlo (solo se puede en orbita) y, al terminar, el resultado.
+                let minigame_color = Color::new(255, 90, 165, 255);
+                if let Some((body, hud)) = game.state.minigame_hud() {
                     let world = hud::to_ascii(game.scene.bodies[body].name);
-                    d.draw_text(
-                        &format!("CARRERA en {world}: puerta {}/{total}   tiempo: {elapsed:.1}s   [R] cancelar", next_gate + 1),
-                        10,
-                        124,
-                        20,
-                        Color::new(255, 90, 165, 255),
-                    );
+                    let text = match hud {
+                        interaction::MinigameHud::Gates { next, total, elapsed, gate_left } => match gate_left {
+                            Some(left) => format!("{world}: aro {}/{total}   tiempo: {elapsed:.1}s   se apaga en {left:.1}s   [R] cancelar", next + 1),
+                            None => format!("{world}: aro {}/{total}   tiempo: {elapsed:.1}s   [R] cancelar", next + 1),
+                        },
+                        interaction::MinigameHud::Survive { elapsed, goal } => {
+                            format!("{world}: sobrevive {elapsed:.1}/{goal:.0}s esquivando los cristales   [R] cancelar")
+                        }
+                        interaction::MinigameHud::Collect { touched, total, remaining } => {
+                            format!("{world}: objetivos {touched}/{total}   tiempo restante: {remaining:.1}s   [R] cancelar")
+                        }
+                    };
+                    d.draw_text(&text, 10, 124, 20, minigame_color);
                 } else if let Some(i) = game.state.orbit_lock {
-                    if game.state.has_race_track(i) {
-                        d.draw_text("[R] iniciar la carrera de anillos", 10, 124, 20, Color::new(255, 90, 165, 255));
+                    if let Some(name) = game.state.minigame_name(i) {
+                        d.draw_text(&format!("[R] iniciar: {name}"), 10, 124, 20, minigame_color);
                     }
                 }
-                if let Some(result) = game.state.race_result {
+                if let Some(result) = &game.state.race_result {
                     let world = hud::to_ascii(game.scene.bodies[result.body].name);
-                    let text = if result.best {
-                        format!("Carrera en {world} terminada en {:.1}s: nuevo mejor tiempo!", result.time)
-                    } else {
-                        format!("Carrera en {world} terminada en {:.1}s", result.time)
-                    };
-                    draw_centered!(d, &text, 94, 24, Color::new(255, 90, 165, 255));
+                    let text = format!("{world}: {}", hud::to_ascii(&result.text));
+                    let color = if result.success { Color::new(110, 255, 150, 255) } else { Color::new(255, 110, 90, 255) };
+                    draw_centered!(d, &text, 94, 24, color);
                 }
 
                 // Letreros al centro: la explosión o, si no, el aviso de calor.
@@ -1198,7 +1203,7 @@ fn main() {
                     // son tres lineas porque en menos ya no cabia en la ventana
                     let help = [
                         "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear".to_string(),
-                        format!("1-{} destino   Tab warp/cancelar   G gravedad   P foto   T tour   K portal (demo)   R carrera (en orbita)", game.scene.worlds().len()),
+                        format!("1-{} destino   Tab warp/cancelar   G gravedad   P foto   T tour   K portal (demo)   R minijuego (en orbita)", game.scene.worlds().len()),
                         "C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11 pantalla".to_string(),
                     ];
                     for (k, line) in help.iter().enumerate() {
