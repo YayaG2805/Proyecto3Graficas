@@ -1080,6 +1080,26 @@ impl FragmentShader for OrbitShader {
 }
 
 // ---------------------------------------------------------------------------
+// CARRERA DE ANILLOS (interaction.rs): aro que brilla con franjas q giran, como
+// las luces de una pista. La próxima puerta pulsa fuerte; las que faltan más
+// adelante se ven tenues y quietas, así se distingue cuál hay que cruzar ya.
+// ---------------------------------------------------------------------------
+pub struct RaceGateShader {
+    pub next: bool,
+}
+
+impl FragmentShader for RaceGateShader {
+    fn shade(&self, f: &Fragment, u: &Uniforms) -> Vec3 {
+        // franjas alrededor del tubo (uv.0 da la vuelta grande del toro) q giran con el tiempo
+        let speed = if self.next { 2.5 } else { 0.8 };
+        let stripe = if (f.uv.0 * 10.0 - u.time * speed).rem_euclid(1.0) < 0.5 { 1.0 } else { 0.35 };
+        let pulse = if self.next { 0.65 + 0.35 * (u.time * 5.0).sin() } else { 0.45 };
+        let base = if self.next { Vec3::new(1.0, 0.35, 0.65) } else { Vec3::new(0.35, 0.55, 1.0) };
+        base * (pulse * stripe)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CIELO (skybox procedural): se evalúa por dirección de vista en cada píxel vacío.
 // Las estrellas están "pegadas" a la dirección, así que se ven en el horizonte y
 // giran correctamente cuando gira la cámara (pero no se acercan al moverse).

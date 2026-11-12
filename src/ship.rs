@@ -211,6 +211,7 @@ pub struct ShipInput {
     pub select: Option<usize>, // teclas 1 a 6: el numero de mundo (ver Scene::worlds)
     pub photo: bool,           // P
     pub gravity_toggle: bool,  // G
+    pub race_toggle: bool,     // R: empieza o cancela la carrera de anillos (hay q estar en orbita)
 }
 
 impl Ship {

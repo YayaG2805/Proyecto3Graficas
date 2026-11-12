@@ -7,6 +7,7 @@ use crate::mesh::{flat_mesh, Mesh};
 use crate::noise::hash01;
 use crate::renderer::{Fragment, FragmentShader, Renderer, Uniforms};
 use crate::scene::Scene;
+use crate::shaders::RaceGateShader;
 use crate::ship::{Ship, ShipInput};
 use std::sync::Arc;
 
@@ -37,6 +38,93 @@ const CRYSTAL_COLOR: Vec3 = Vec3 { x: 1.0, y: 0.8, z: 0.25 };
 const CRYSTAL_RIM_COLOR: Vec3 = Vec3 { x: 1.0, y: 1.0, z: 0.85 };
 const CRYSTAL_BAND_FREQ: f32 = 6.0;
 const CRYSTAL_BAND_SPEED: f32 = 4.0;
+
+// --- carrera de anillos (tecla R): hay q estar en orbita (F) de un mundo pa poder jugarla ---
+// misma semilla = mismo circuito, se puede cambiar en vivo
+const RACE_SEED: u32 = 83;
+const RACE_GATE_COUNT: usize = 6;
+// a q distancia del centro del mundo va el circuito: radio * esto + lo otro
+// un poco mas lejos q los cristales, pa q quepa rodeando el planeta sin rozar la superficie
+const RACE_RING_RADII: f32 = 1.8;
+const RACE_RING_EXTRA: f32 = 1.0;
+// q tan inclinado va el eje del circuito respecto a +y, pa q cada mundo se vea distinto
+const RACE_AXIS_TILT: f32 = 0.5;
+// tamaño del aro sin escalar: radio del circulo central y grosor del tubo
+const RACE_GATE_MAJOR: f32 = 1.0;
+const RACE_GATE_MINOR: f32 = 0.16;
+// el aro mide esto * el radio del planeta
+const RACE_GATE_SCALE_RADII: f32 = 0.5;
+// cuanto margen de mas tiene el agujero pa contar como "pasada", si no es imposible de verdad
+const RACE_PASS_LENIENCY: f32 = 1.5;
+// cuanto dura el mensaje de "carrera terminada" en el hud
+const RACE_RESULT_SECONDS: f32 = 6.0;
+
+// una puerta del circuito: offset fijo desde el centro del mundo (no rota con el giro del
+// planeta, igual q los cristales) y como esta orientada: la nave la atraviesa por el agujero,
+// en la direccion `forward` (es tangente al circulo, por donde se vuela rodeando el planeta)
+#[derive(Clone, Copy)]
+struct RaceGate {
+    offset: Vec3,
+    right: Vec3,
+    forward: Vec3,
+    scale: f32,
+    radius: f32,
+}
+
+// un vector cualquiera en angulo recto con v, pa armar una base ortonormal
+fn perpendicular(v: Vec3) -> Vec3 {
+    let axis = if v.y.abs() < 0.9 { Vec3::UP } else { Vec3::new(1.0, 0.0, 0.0) };
+    v.cross(axis).normalized()
+}
+
+// arma el circuito de cada mundo: un circulo de puertas repartidas parejo, con el eje
+// inclinado distinto en cada uno; todo sale de la semilla, asi q es reproducible
+fn make_race_tracks(scene: &Scene, seed: u32) -> Vec<Vec<RaceGate>> {
+    scene
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            // el sol y las lunas no tienen carrera, igual q los cristales
+            if i < FIRST_WORLD || b.parent.is_some() {
+                return Vec::new();
+            }
+            let polar = hash01(i as i32, 20, 0, seed) * RACE_AXIS_TILT;
+            let azimuth = hash01(i as i32, 21, 0, seed) * std::f32::consts::TAU;
+            let axis = Vec3::new(polar.sin() * azimuth.cos(), polar.cos(), polar.sin() * azimuth.sin()).normalized();
+            let t1 = perpendicular(axis);
+            let t2 = axis.cross(t1);
+            let ring = b.radius * RACE_RING_RADII + RACE_RING_EXTRA;
+            let scale = b.radius * RACE_GATE_SCALE_RADII;
+            (0..RACE_GATE_COUNT)
+                .map(|k| {
+                    let a = k as f32 / RACE_GATE_COUNT as f32 * std::f32::consts::TAU;
+                    let offset = (t1 * a.cos() + t2 * a.sin()) * ring;
+                    // la tangente del circulo en este punto: por donde hay q volar pa atravesarla
+                    let forward = (t2 * a.cos() - t1 * a.sin()).normalized();
+                    let right = forward.cross(axis).normalized();
+                    RaceGate { offset, right, forward, scale, radius: scale * (RACE_GATE_MAJOR - RACE_GATE_MINOR) * RACE_PASS_LENIENCY }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+// la carrera en curso
+#[derive(Clone, Copy)]
+struct ActiveRace {
+    body: usize,
+    next_gate: usize,
+    elapsed: f32,
+}
+
+/// el resultado de la ultima carrera terminada, pa mostrarlo un rato en el hud
+#[derive(Clone, Copy)]
+pub struct RaceResult {
+    pub body: usize,
+    pub time: f32,
+    pub best: bool,
+}
 
 // un cristal flotando cerca de un mundo
 struct Collectible {
@@ -137,6 +225,18 @@ pub struct GameState {
     collectibles: Vec<Collectible>,
     crystal_lods: Vec<Mesh>,
     crystal_shader: Arc<dyn FragmentShader>,
+
+    // --- carrera de anillos ---
+    /// la carrera en curso, None = no se esta jugando
+    race: Option<ActiveRace>,
+    /// el circuito de cada mundo (vacio en el sol y las lunas)
+    race_tracks: Vec<Vec<RaceGate>>,
+    /// mejor tiempo logrado en cada mundo, None = todavia no se completa ninguna
+    pub race_best: Vec<Option<f32>>,
+    /// el resultado de la ultima carrera terminada, pa mostrarlo un rato en el hud
+    pub race_result: Option<RaceResult>,
+    race_result_timer: f32,
+    race_gate_mesh: Mesh,
 }
 
 impl GameState {
@@ -156,6 +256,94 @@ impl GameState {
             collectibles,
             crystal_lods: vec![crystal_mesh()],
             crystal_shader: Arc::new(CrystalShader),
+            race: None,
+            race_tracks: make_race_tracks(scene, RACE_SEED),
+            race_best: vec![None; scene.bodies.len()],
+            race_result: None,
+            race_result_timer: 0.0,
+            race_gate_mesh: Mesh::torus(RACE_GATE_MAJOR, RACE_GATE_MINOR, 24, 10),
+        }
+    }
+
+    /// si hay carrera: el mundo, cuantas puertas lleva, cuantas hay en total y cuanto tiempo lleva
+    pub fn race_progress(&self) -> Option<(usize, usize, usize, f32)> {
+        self.race.map(|a| (a.body, a.next_gate, self.race_tracks[a.body].len(), a.elapsed))
+    }
+
+    /// si el mundo i tiene circuito de carrera (el sol y las lunas no), pa el aviso del hud
+    pub fn has_race_track(&self, body: usize) -> bool {
+        !self.race_tracks[body].is_empty()
+    }
+
+    /// cambia la carrera segun la tecla R y el estado de la orbita
+    fn update_race(&mut self, ship: &Ship, scene: &Scene, race_toggle: bool, t: f32, dt: f32) {
+        if self.race_result_timer > 0.0 {
+            self.race_result_timer -= dt;
+            if self.race_result_timer <= 0.0 {
+                self.race_result = None;
+            }
+        }
+
+        // si se solto la orbita de ese mundo (F, warp, explosion...) la carrera se cancela sola
+        if let Some(active) = self.race {
+            if ship.orbit_body() != Some(active.body) {
+                self.race = None;
+            }
+        }
+
+        // R: si ya estamos corriendo la cancela; si no, la empieza (solo estando en orbita
+        // de un mundo con circuito, el sol y las lunas no tienen)
+        if race_toggle {
+            self.race = if self.race.is_some() {
+                None
+            } else {
+                ship.orbit_body().filter(|&i| !self.race_tracks[i].is_empty()).map(|i| ActiveRace { body: i, next_gate: 0, elapsed: 0.0 })
+            };
+        }
+
+        let Some(mut active) = self.race else { return };
+        active.elapsed += dt;
+        let gates = &self.race_tracks[active.body];
+        if let Some(gate) = gates.get(active.next_gate) {
+            // mismo truco q pick_up: reviso todo el tramo q recorrio la nave este cuadro, no
+            // solo donde quedo, pa no saltarnos la puerta a mucha velocidad o con pocos fps
+            let target = scene.body_position(active.body, t) + gate.offset;
+            let previous = ship.position - ship.velocity * dt;
+            let path = ship.position - previous;
+            let length_squared = path.dot(path).max(1e-6);
+            let along = ((target - previous).dot(path) / length_squared).clamp(0.0, 1.0);
+            let closest = previous + path * along;
+            if (target - closest).length() < gate.radius {
+                active.next_gate += 1;
+            }
+        }
+
+        if active.next_gate >= gates.len() {
+            let improved = match self.race_best[active.body] {
+                Some(best) => active.elapsed < best,
+                None => true,
+            };
+            if improved {
+                self.race_best[active.body] = Some(active.elapsed);
+            }
+            self.race_result = Some(RaceResult { body: active.body, time: active.elapsed, best: improved });
+            self.race_result_timer = RACE_RESULT_SECONDS;
+            self.race = None;
+        } else {
+            self.race = Some(active);
+        }
+    }
+
+    /// dibuja las puertas q faltan de la carrera en curso, va en Game::draw_geometry
+    pub fn draw_race(&self, r: &mut Renderer, scene: &Scene, t: f32) {
+        let Some(active) = self.race else { return };
+        let gates = &self.race_tracks[active.body];
+        let center = scene.body_position(active.body, t);
+        for (k, gate) in gates.iter().enumerate().skip(active.next_gate) {
+            let up = gate.right.cross(gate.forward);
+            let model = Mat4::from_basis(gate.right, up, gate.forward, center + gate.offset) * Mat4::scale(Vec3::splat(gate.scale));
+            let shader: Arc<dyn FragmentShader> = Arc::new(RaceGateShader { next: k == active.next_gate });
+            r.draw_mesh_additive(&self.race_gate_mesh, &model, shader);
         }
     }
 
@@ -286,6 +474,11 @@ pub fn update(state: &mut GameState, ship: &mut Ship, scene: &Scene, input: &Shi
     // paso 6: recoger cristales, con la simulacion congelada no se mueve nada asi q no hace falta
     if !state.photo_mode {
         state.pick_up(ship, scene, t, dt);
+    }
+
+    // paso 6.5: la carrera de anillos, solo se puede jugar en orbita: primero F, despues R
+    if !state.photo_mode {
+        state.update_race(ship, scene, input.race_toggle, t, dt);
     }
 
     // paso 7: con P entramos o salimos del modo foto
@@ -621,5 +814,104 @@ mod tests {
         assert!(state.photo_mode);
         update(&mut state, &mut ship, &scene, &photo, 0.0, 0.016);
         assert!(!state.photo_mode);
+    }
+
+    #[test]
+    fn la_r_no_hace_nada_sin_estar_en_orbita() {
+        let scene = Scene::new();
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 10.0);
+        let race = ShipInput { race_toggle: true, ..Default::default() };
+        update(&mut state, &mut ship, &scene, &race, 0.0, 0.016);
+        assert!(state.race_progress().is_none());
+    }
+
+    #[test]
+    fn la_r_empieza_la_carrera_en_orbita_y_otra_r_la_cancela() {
+        let scene = Scene::new();
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 2.0);
+        let orbit = ShipInput { orbit_toggle: true, ..Default::default() };
+        let race = ShipInput { race_toggle: true, ..Default::default() };
+        let tick = |state: &mut GameState, ship: &mut Ship, input: &ShipInput| update(state, ship, &scene, input, 0.0, 0.016);
+
+        tick(&mut state, &mut ship, &orbit);
+        assert_eq!(state.orbit_lock, Some(1));
+
+        tick(&mut state, &mut ship, &race);
+        let (body, next, total, _) = state.race_progress().expect("deberia haber carrera en curso");
+        assert_eq!(body, 1);
+        assert_eq!(next, 0);
+        assert_eq!(total, RACE_GATE_COUNT);
+
+        tick(&mut state, &mut ship, &race);
+        assert!(state.race_progress().is_none());
+    }
+
+    #[test]
+    fn soltar_la_orbita_cancela_la_carrera_en_curso() {
+        let scene = Scene::new();
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 2.0);
+        let orbit = ShipInput { orbit_toggle: true, ..Default::default() };
+        let race = ShipInput { race_toggle: true, ..Default::default() };
+        let tick = |state: &mut GameState, ship: &mut Ship, input: &ShipInput| update(state, ship, &scene, input, 0.0, 0.016);
+
+        tick(&mut state, &mut ship, &orbit);
+        tick(&mut state, &mut ship, &race);
+        assert!(state.race_progress().is_some());
+
+        tick(&mut state, &mut ship, &orbit); // F otra vez: suelta la orbita
+        assert_eq!(ship.orbit_body(), None);
+        tick(&mut state, &mut ship, &ShipInput::default());
+        assert!(state.race_progress().is_none(), "sin orbita la carrera se tiene q cancelar sola");
+    }
+
+    #[test]
+    fn pasar_las_puertas_en_orden_termina_la_carrera_y_guarda_el_mejor_tiempo() {
+        let scene = Scene::new();
+        let mut state = GameState::new(&scene);
+        let mut ship = ship_above(&scene, 1, scene.bodies[1].radius * 2.0);
+        let dt = 1.0 / 60.0;
+        update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, dt);
+        update(&mut state, &mut ship, &scene, &ShipInput { race_toggle: true, ..Default::default() }, 0.0, dt);
+        assert!(state.race_progress().is_some());
+        assert_eq!(state.race_best[1], None);
+
+        let track = &make_race_tracks(&scene, RACE_SEED)[1];
+        let mut t = 0.0;
+        for gate in track {
+            let target = scene.body_position(1, t) + gate.offset;
+            // la "teletransporto" justo cruzando la puerta, pa probar q cada una avanza la carrera
+            ship.position = target - gate.forward * 0.1;
+            ship.velocity = gate.forward * 50.0;
+            t += dt;
+            update(&mut state, &mut ship, &scene, &ShipInput::default(), t, dt);
+        }
+        assert!(state.race_progress().is_none(), "con todas las puertas la carrera ya deberia haber terminado");
+        let result = state.race_result.expect("deberia quedar un resultado");
+        assert_eq!(result.body, 1);
+        assert!(result.best);
+        assert_eq!(state.race_best[1], Some(result.time));
+    }
+
+    #[test]
+    fn la_misma_semilla_da_el_mismo_circuito() {
+        let scene = Scene::new();
+        let a = make_race_tracks(&scene, RACE_SEED);
+        let b = make_race_tracks(&scene, RACE_SEED);
+        let other = make_race_tracks(&scene, RACE_SEED + 1);
+
+        assert_eq!(a[1].len(), RACE_GATE_COUNT);
+        for k in 0..a[1].len() {
+            assert_eq!((a[1][k].offset - b[1][k].offset).length(), 0.0);
+        }
+        let moved = (0..a[1].len()).filter(|&k| (a[1][k].offset - other[1][k].offset).length() > 0.5).count();
+        assert!(moved > 0, "otra semilla deberia mover el circuito");
+
+        // el sol y las lunas no tienen circuito
+        assert!(a[0].is_empty());
+        let central_city = scene.bodies.iter().position(|b| b.name == "Central City").unwrap();
+        assert!(a[central_city].is_empty());
     }
 }

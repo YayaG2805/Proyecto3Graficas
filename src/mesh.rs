@@ -228,6 +228,38 @@ impl Mesh {
         mesh
     }
 
+    /// TORO (dona): el agujero queda sobre el eje Z local. `major_radius` es el radio del
+    /// círculo central y `minor_radius` el grosor del tubo. Se usa para las puertas de la
+    /// carrera de anillos (interaction.rs): la nave debe atravesar el agujero.
+    pub fn torus(major_radius: f32, minor_radius: f32, major_segments: u32, minor_segments: u32) -> Mesh {
+        let (maj, min) = (major_segments as usize, minor_segments as usize);
+        let mut mesh = Mesh::default();
+        for i in 0..maj {
+            let theta = i as f32 / maj as f32 * std::f32::consts::TAU;
+            let radial = Vec3::new(theta.cos(), theta.sin(), 0.0);
+            for j in 0..min {
+                let phi = j as f32 / min as f32 * std::f32::consts::TAU;
+                // normal = la misma fórmula del tubo pero con radio 1: apunta derecho hacia afuera
+                let normal = radial * phi.cos() + Vec3::new(0.0, 0.0, phi.sin());
+                let position = radial * major_radius + normal * minor_radius;
+                mesh.vertices.push(Vertex { position, normal, uv: (i as f32 / maj as f32, j as f32 / min as f32), tangent: Vec3::ZERO });
+            }
+        }
+        // Cada cuadrito (i,j)-(i+1,j)-(i,j+1)-(i+1,j+1) da la vuelta en las dos direcciones
+        // (mayor y menor), por eso el módulo: el último anillo se une con el primero.
+        for i in 0..maj {
+            let ni = (i + 1) % maj;
+            for j in 0..min {
+                let nj = (j + 1) % min;
+                let (p00, p01) = ((i * min + j) as u32, (i * min + nj) as u32);
+                let (p10, p11) = ((ni * min + j) as u32, (ni * min + nj) as u32);
+                mesh.indices.extend([p00, p10, p01, p10, p11, p01]);
+            }
+        }
+        mesh.compute_bounds();
+        mesh
+    }
+
     /// Nave provisional (una "flecha" low-poly) mientras modelamos la de verdad en Blender.
     /// La nariz apunta a -Z (adelante en espacio local).
     /// TODO(nave): reemplazar por assets/ship.obj modelado por nosotros.

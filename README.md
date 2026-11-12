@@ -60,6 +60,7 @@ Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, explosión, Apoko
 | 1 – 5 | Elegir destino: Themyscira, Krypton, Gotham, Atlantis, Oa (6: Apokolips, cuando aparece) |
 | Tab | Warp al destino (otro Tab lo cancela) |
 | K | Abrir el Boom Tube de Apokolips sin juntar los cristales (atajo para la demo) |
+| R | Carrera de anillos del mundo cercano (hay que estar en órbita, tecla F) |
 | G | Prender / apagar la gravedad |
 | P | Modo foto (congela todo; la cámara sigue) |
 | C | Prender / apagar el culling por frustum |
@@ -77,7 +78,8 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 1. En la pantalla de inicio, **T** arranca el tour automático: vuelo espacial, warp a un mundo,
    escaneo, vuelta completa pegado a la superficie y alejamiento, mundo tras mundo.
 2. Para pilotear: **1–5** para elegir un mundo, **Tab** para viajar, **F** al llegar para rodearlo,
-   **E** para ver su ficha y **F** o **Shift** para alejarse.
+   **E** para ver su ficha, **R** para correr el circuito de anillos de ese mundo, y **F** o
+   **Shift** para alejarse.
 3. Con **C** y **L** se ve en el HUD cómo cambian los objetos y triángulos procesados.
 4. Si la nave se acerca demasiado al Sol aparece el aviso de calor; si lo toca, explota y
    reaparece junto al mundo elegido.
@@ -151,6 +153,14 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 
 ### Extras
 
+- **Carrera de anillos:** en cada mundo hay un circuito de 6 aros repartido alrededor del
+  planeta (`make_race_tracks` en `src/interaction.rs`, posiciones reproducibles con
+  `RACE_SEED`). Solo se puede jugar en modo órbita (tecla **F**); con **R** arranca el
+  cronómetro y hay que atravesar los aros en orden, con **R** otra vez se cancela. Todo pasa
+  en la misma escena, sin pantalla de carga: el aro de la torre se genera en el pipeline propio
+  (`Mesh::torus`), se dibuja con un shader animado propio (`RaceGateShader`) y la detección de
+  "pasó por el aro" usa la misma técnica anticolisión por tramo que los cristales. Guarda el
+  mejor tiempo de cada mundo mientras dure la partida.
 - Personajes de la Liga en sus mundos (`src/creatures.rs`), cinturón de asteroides y cometa con
   órbita elíptica (`src/exotics.rs`), atmósferas, nubes, llamaradas solares y eclipse de Central
   City sobre Gotham.

@@ -524,6 +524,7 @@ impl Game {
 
         // Lo aditivo (la cola y el halo del cometa, la llama del turbo) va SIEMPRE al final,
         // porque necesita el z-buffer completo de lo opaco.
+        self.state.draw_race(&mut self.renderer, &self.scene, self.time);
         self.comet.draw_glow(&mut self.renderer, self.time);
         creatures::draw_creature_glows(&mut self.renderer, &self.scene, self.time, &self.creatures);
         if let Some(oa) = &self.oa {
@@ -898,6 +899,7 @@ fn read_input(rl: &RaylibHandle) -> ShipInput {
         select: read_world_key(rl),
         photo: rl.is_key_pressed(KeyboardKey::KEY_P),
         gravity_toggle: rl.is_key_pressed(KeyboardKey::KEY_G),
+        race_toggle: rl.is_key_pressed(KeyboardKey::KEY_R),
     }
 }
 
@@ -1039,7 +1041,7 @@ fn main() {
                 draw_centered!(d, "un recorrido por los mundos de la Liga", y - 128, 26, Color::GOLD);
                 draw_centered!(d, "Renderer por software  -  Graficas por Computadora 2026", y - 92, 20, Color::LIGHTGRAY);
                 draw_centered!(d, "W/S acelerar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar", y - 20, 18, Color::SKYBLUE);
-                draw_centered!(d, "F orbita   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda   K portal", y + 6, 18, Color::SKYBLUE);
+                draw_centered!(d, "F orbita   R carrera   E escanear   1-5 destino   Tab warp   P foto   M sonido   H ayuda   K portal", y + 6, 18, Color::SKYBLUE);
                 if (game.time * 3.0).sin() > -0.4 {
                     draw_centered!(d, "ENTER para empezar", y + 90, 34, Color::RAYWHITE);
                 }
@@ -1112,6 +1114,32 @@ fn main() {
                     }
                 }
 
+                // Carrera de anillos: progreso si está en curso, si no un aviso para empezarla
+                // (solo se puede en órbita) y, al terminar, cuánto tardó.
+                if let Some((body, next_gate, total, elapsed)) = game.state.race_progress() {
+                    let world = hud::to_ascii(game.scene.bodies[body].name);
+                    d.draw_text(
+                        &format!("CARRERA en {world}: puerta {}/{total}   tiempo: {elapsed:.1}s   [R] cancelar", next_gate + 1),
+                        10,
+                        124,
+                        20,
+                        Color::new(255, 90, 165, 255),
+                    );
+                } else if let Some(i) = game.state.orbit_lock {
+                    if game.state.has_race_track(i) {
+                        d.draw_text("[R] iniciar la carrera de anillos", 10, 124, 20, Color::new(255, 90, 165, 255));
+                    }
+                }
+                if let Some(result) = game.state.race_result {
+                    let world = hud::to_ascii(game.scene.bodies[result.body].name);
+                    let text = if result.best {
+                        format!("Carrera en {world} terminada en {:.1}s: nuevo mejor tiempo!", result.time)
+                    } else {
+                        format!("Carrera en {world} terminada en {:.1}s", result.time)
+                    };
+                    draw_centered!(d, &text, 94, 24, Color::new(255, 90, 165, 255));
+                }
+
                 // Letreros al centro: la explosión o, si no, el aviso de calor.
                 if let Some(e) = &game.explosion {
                     let left = (EXPLOSION_TIME - e.age).max(0.0).ceil() as i32;
@@ -1170,7 +1198,7 @@ fn main() {
                     // son tres lineas porque en menos ya no cabia en la ventana
                     let help = [
                         "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear".to_string(),
-                        format!("1-{} destino   Tab warp/cancelar   G gravedad   P foto   T tour   K portal (demo)", game.scene.worlds().len()),
+                        format!("1-{} destino   Tab warp/cancelar   G gravedad   P foto   T tour   K portal (demo)   R carrera (en orbita)", game.scene.worlds().len()),
                         "C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11 pantalla".to_string(),
                     ];
                     for (k, line) in help.iter().enumerate() {
