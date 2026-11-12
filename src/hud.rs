@@ -158,6 +158,21 @@ pub fn draw_radar(cv: &mut Canvas, forward: Vec3, blips: &[RadarBlip]) {
     }
 }
 
+/// Tiñe TODA la pantalla de un color: con opacidad `center_alpha` en el centro, que crece hasta
+/// `edge_alpha` en las esquinas (viñeta). Sirve para el aviso de calor y el destello de la explosión.
+/// La opacidad crece con el cuadrado de la distancia al centro: d² = dx² + dy² (de 0 a 2).
+pub fn draw_vignette(cv: &mut Canvas, c: Vec3, center_alpha: f32, edge_alpha: f32) {
+    let (hw, hh) = (cv.w as f32 * 0.5, cv.h as f32 * 0.5);
+    for y in 0..cv.h as i32 {
+        let dy = (y as f32 + 0.5 - hh) / hh;
+        for x in 0..cv.w as i32 {
+            let dx = (x as f32 + 0.5 - hw) / hw;
+            let d2 = (dx * dx + dy * dy) * 0.5;
+            cv.blend(x, y, c, center_alpha + (edge_alpha - center_alpha) * d2);
+        }
+    }
+}
+
 /// Fondo de un panel de texto (la ficha): rectángulo oscuro con borde.
 pub fn draw_panel(cv: &mut Canvas, x0: i32, y0: i32, x1: i32, y1: i32) {
     cv.fill_rect(x0, y0, x1, y1, PANEL_COLOR, PANEL_ALPHA);

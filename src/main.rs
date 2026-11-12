@@ -7,6 +7,7 @@
 mod audio;
 mod creatures;
 mod exotics;
+mod explosion;
 mod hud;
 mod interaction;
 mod math;
@@ -24,6 +25,7 @@ mod texture;
 
 use creatures::{create_creatures, Creature};
 use exotics::{AsteroidBelt, Comet, ASTEROID_SEED};
+use explosion::{Explosion, ExplosionAssets, EXPLOSION_TIME, FLASH_TIME, SHAKE_STRENGTH, SHAKE_TIME};
 use hud::{Canvas, RadarBlip};
 use interaction::GameState;
 use math::{Mat4, Vec3};
@@ -69,6 +71,17 @@ const CARD_Y1: i32 = 152;
 const CARD_WRAP: usize = 40;
 /// Escala de la resolución interna a la ventana (1280 / 640).
 const HUD_SCALE: i32 = WINDOW_W / RENDER_W as i32;
+
+// --- Calor del Sol y explosión ---
+/// El aviso de calor empieza a esta distancia de la colisión del Sol y llega al máximo al tocarla.
+const HEAT_RANGE: f32 = 18.0;
+/// Desde qué calor sale el letrero de alerta, y desde cuál parpadea.
+const HEAT_WARNING: f32 = 0.25;
+const HEAT_DANGER: f32 = 0.6;
+/// Temblor de la cámara con el calor al máximo (unidades del mundo).
+const HEAT_SHAKE: f32 = 0.08;
+const HEAT_COLOR: Vec3 = Vec3::new(1.0, 0.3, 0.05);
+const FLASH_COLOR: Vec3 = Vec3::new(1.0, 0.95, 0.8);
 
 /// Color del punto de cada cuerpo en el radar.
 fn body_color(name: &str) -> Vec3 {
@@ -118,6 +131,14 @@ struct Game {
     /// Cuerpo cuya ficha está abierta en el HUD y cuántos segundos lleva abierta.
     card_body: Option<usize>,
     card_timer: f32,
+    /// Índice del Sol (el único cuerpo que no orbita): tocarlo destruye la nave.
+    sun: Option<usize>,
+    /// Qué tan cerca va la nave del Sol: 0 = lejos, 1 = tocándolo (aviso de calor).
+    heat: f32,
+    /// La explosión en curso; mientras haya una, la nave no existe y no hay controles.
+    explosion: Option<Explosion>,
+    /// Pedazos de la nave, bola de fuego y onda: se arman una vez al cargar.
+    explosion_assets: ExplosionAssets,
 }
 
 impl Game {
@@ -151,6 +172,7 @@ impl Game {
         // z-buffer, así no hay huecos entre la nave y la llama.
         let exhaust_origin = Vec3::new((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, (lo.z + hi.z) * 0.5);
         let exhaust_mesh = Mesh::exhaust_plume(half_w, half_h, 24);
+        let explosion_assets = ExplosionAssets::new(&ship_mesh);
 
         let ship = Ship::new(Vec3::new(0.0, 3.0, 70.0));
         let camera = ChaseCamera::new(&ship);
@@ -161,6 +183,7 @@ impl Game {
         let creatures = create_creatures(&scene);
         let oa = oa::Oa::new(&scene);
         let mundos = mundos::Mundos::new(&scene);
+        let sun = scene.bodies.iter().position(|b| b.orbit_radius == 0.0 && b.parent.is_none());
         Game {
             renderer: Renderer::new(RENDER_W, RENDER_H, uniforms),
             scene,
@@ -182,6 +205,10 @@ impl Game {
             state,
             card_body: None,
             card_timer: 0.0,
+            sun,
+            heat: 0.0,
+            explosion: None,
+            explosion_assets,
         }
     }
 
@@ -211,6 +238,12 @@ impl Game {
     }
 
     fn update(&mut self, input: ShipInput, dt: f32) {
+        // paso 0: si la nave está explotando no hay vuelo, va por otro camino
+        if self.explosion.is_some() {
+            self.update_exploding(input, dt);
+            return;
+        }
+
         // paso 1: en modo foto todo se queda congelado, ni el tiempo ni la nave avanzan
         // como el tiempo no corre, los planetas y los shaders animados tambien se quedan quietos
         if !self.state.photo_mode {
@@ -242,6 +275,70 @@ impl Game {
 
         // paso 4: la camara va de ultimo pa q siga a la nave ya en su posicion final del cuadro
         self.camera.update(&self.ship, dt);
+
+        // paso 5: el calor del Sol, y si la nave lo tocó, explota.
+        // La colisión la saca justo a su radio, así que "tocarlo" es estar a ~0 de él.
+        if let Some(s) = self.sun {
+            self.heat = explosion::heat_near(&self.scene, s, self.time, self.ship.position, HEAT_RANGE);
+            let gap = (self.scene.body_position(s, self.time) - self.ship.position).length()
+                - ship::collision_radius(self.scene.bodies[s].radius);
+            if gap < 0.05 && !self.state.photo_mode {
+                self.explode();
+            }
+        }
+    }
+
+    /// La nave tocó el Sol: se cancela todo lo que estaba haciendo y empieza la explosión.
+    fn explode(&mut self) {
+        self.ship.cancel_warp();
+        self.ship.release_orbit();
+        self.ship.velocity = Vec3::ZERO;
+        self.ship.boost = 0.0;
+        self.state.scanned = None;
+        let center = self.sun.map_or(Vec3::ZERO, |s| self.scene.body_position(s, self.time));
+        self.explosion = Some(Explosion::new(self.ship.model_matrix(1.0), self.ship.position - center));
+        self.heat = 0.0;
+        self.warp = 0.0;
+    }
+
+    /// Un cuadro de la explosión. Solo funcionan P (foto) y 1-5 (elegir dónde reaparecer).
+    fn update_exploding(&mut self, input: ShipInput, dt: f32) {
+        if !self.state.photo_mode {
+            self.time += dt;
+            if let Some(e) = &mut self.explosion {
+                e.age += dt;
+            }
+        }
+        let allowed = ShipInput { select: input.select, photo: input.photo, ..Default::default() };
+        interaction::update(&mut self.state, &mut self.ship, &self.scene, &allowed, self.time, dt);
+        // la cámara se queda donde estaba, mirando la explosión
+        if let Some(e) = &self.explosion {
+            self.camera.target = e.center;
+            if e.age >= EXPLOSION_TIME {
+                self.respawn();
+            }
+        }
+    }
+
+    /// Termina la explosión: nave nueva junto al mundo elegido como destino (teclas 1-5).
+    fn respawn(&mut self) {
+        let gravity_on = self.ship.gravity_on;
+        let (pos, center, velocity) = explosion::respawn_point(&self.scene, self.state.warp_target, self.time);
+        self.ship = Ship::new(pos);
+        self.ship.gravity_on = gravity_on;
+        aim_ship_at(self, pos, center);
+        self.ship.velocity = velocity;
+        self.explosion = None;
+    }
+
+    /// Cuánto se mueve la cámara este cuadro: fuerte al explotar y un temblor con el calor.
+    fn shake(&self) -> Vec3 {
+        let (amount, t) = match &self.explosion {
+            Some(e) => (SHAKE_STRENGTH * (1.0 - e.age / SHAKE_TIME).max(0.0).powi(2), e.age),
+            None => (HEAT_SHAKE * self.heat * self.heat, self.time),
+        };
+        // tres senos de frecuencias distintas: parece al azar pero depende solo del tiempo
+        Vec3::new((t * 53.0).sin(), (t * 71.0 + 1.3).sin(), (t * 61.0 + 2.1).sin()) * amount
     }
 
     fn render(&mut self) {
@@ -273,6 +370,18 @@ impl Game {
             highlight: false,
         });
         let mut cv = Canvas { px: &mut self.renderer.color, w: RENDER_W, h: RENDER_H };
+        // Aviso de calor: la pantalla se pone roja, más en las orillas, y late cuando es peligroso.
+        if self.heat > 0.01 {
+            let pulse = if self.heat > HEAT_DANGER { 0.75 + 0.25 * (self.time * 8.0).sin() } else { 1.0 };
+            hud::draw_vignette(&mut cv, HEAT_COLOR, self.heat * 0.12, self.heat * 0.65 * pulse);
+        }
+        // Destello blanco al explotar.
+        if let Some(e) = &self.explosion {
+            let flash = (1.0 - e.age / FLASH_TIME).max(0.0).powi(2);
+            if flash > 0.0 {
+                hud::draw_vignette(&mut cv, FLASH_COLOR, flash, flash);
+            }
+        }
         hud::draw_radar(&mut cv, self.ship.forward(), &blips);
         if self.card_body.is_some() {
             hud::draw_panel(&mut cv, CARD_X0, CARD_Y0, CARD_X1, CARD_Y1);
@@ -287,7 +396,12 @@ impl Game {
 
     /// Etapas 1 a 7 (vértices, recorte, rasterizado, z-buffer). El sombreado va aparte.
     fn draw_geometry(&mut self) {
-        let mut u = Game::make_uniforms(&self.camera, self.time, self.normal_mapping, self.warp, self.ship.position);
+        // la sacudida solo mueve lo que se dibuja, no la cámara de verdad (así no se acumula)
+        let mut camera = self.camera.clone();
+        let shake = self.shake();
+        camera.position += shake;
+        camera.target += shake;
+        let mut u = Game::make_uniforms(&camera, self.time, self.normal_mapping, self.warp, self.ship.position);
         // La luna Central City puede tapar el sol sobre Gotham (eclipse).
         u.eclipse = mundos::gotham::eclipse(&self.scene, self.time);
         self.renderer.begin_frame(u);
@@ -301,13 +415,18 @@ impl Game {
         }
         self.mundos.draw(&mut self.renderer, &self.scene, self.time);
         let model = self.ship.model_matrix(1.0);
-        // El shader de la nave recibe el estado del motor en cada cuadro (sus "uniforms" propios).
-        let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
-            Arc::new(HalconShader { engine_glow: self.ship.engine_glow() })
+        if let Some(e) = &self.explosion {
+            // la nave ya no está: en su lugar van los pedazos
+            e.draw(&mut self.renderer, &self.explosion_assets);
         } else {
-            Arc::new(ShipShader { base: SHIP_COLOR, boost: self.ship.boost })
-        };
-        self.renderer.draw_mesh(&self.ship_mesh, &model, ship_shader);
+            // El shader de la nave recibe el estado del motor y el calor en cada cuadro (sus "uniforms" propios).
+            let ship_shader: Arc<dyn FragmentShader> = if self.ship_is_halcon {
+                Arc::new(HalconShader { engine_glow: self.ship.engine_glow(), heat: self.heat })
+            } else {
+                Arc::new(ShipShader { base: SHIP_COLOR, boost: self.ship.boost })
+            };
+            self.renderer.draw_mesh(&self.ship_mesh, &model, ship_shader);
+        }
 
         // Lo aditivo (la cola y el halo del cometa, la llama del turbo) va SIEMPRE al final,
         // porque necesita el z-buffer completo de lo opaco.
@@ -317,9 +436,12 @@ impl Game {
             oa.draw_glow(&mut self.renderer, &self.scene, self.time);
         }
         self.mundos.draw_glow(&mut self.renderer, &self.scene, self.time);
+        if let Some(e) = &self.explosion {
+            e.draw_glow(&mut self.renderer, &self.explosion_assets);
+        }
 
         // Llama del turbo: SIEMPRE al final, porque es aditiva y necesita el z-buffer completo.
-        if self.ship.boost > 0.01 {
+        if self.ship.boost > 0.01 && self.explosion.is_none() {
             // Largo de la llama (en unidades de la nave, que mide ~3 de punta a punta).
             let length = 0.4 + 2.4 * self.ship.boost;
             let plume = model * Mat4::translation(self.exhaust_origin) * Mat4::scale(Vec3::new(1.0, 1.0, length));
@@ -530,6 +652,36 @@ fn snapshot() {
     g.renderer.save_ppm("snap_agujero_negro.ppm").expect("no se pudo guardar");
     println!("snap_agujero_negro.ppm: listo");
 
+    // Calor y explosión: la nave a 4 unidades de la colisión del Sol, volando de lado.
+    if let Some(s) = g.sun {
+        let sun = g.scene.body_position(s, g.time);
+        let reach = ship::collision_radius(g.scene.bodies[s].radius);
+        let pos = sun + Vec3::new(0.0, 0.0, reach + 4.0);
+        aim_ship_at(&mut g, pos, pos + Vec3::new(30.0, 0.0, 0.0));
+        g.heat = explosion::heat_near(&g.scene, s, g.time, pos, HEAT_RANGE);
+        g.render();
+        g.renderer.save_ppm("snap_calor.ppm").expect("no se pudo guardar");
+        // La misma nave explota; se fotografía de lado a los 0.35 s (fuego) y a 1.2 s (pedazos).
+        g.explode();
+        for (age, file) in [(0.35, "snap_explosion.ppm"), (1.2, "snap_explosion_pedazos.ppm")] {
+            let (center, away) = match &mut g.explosion {
+                Some(e) => {
+                    e.age = age;
+                    (e.center, e.away)
+                }
+                None => break,
+            };
+            g.camera.position = center + away * 10.0 + Vec3::UP * 4.0 + Vec3::new(8.0, 0.0, 0.0);
+            g.camera.target = center;
+            g.camera.up = Vec3::UP;
+            g.render();
+            g.renderer.save_ppm(file).expect("no se pudo guardar");
+        }
+        g.explosion = None;
+        g.heat = 0.0;
+        println!("snap_calor.ppm y snap_explosion*.ppm: listo");
+    }
+
     // Comparación para la demo: la vista del cinturón con culling (C) y LOD (L) prendidos y apagados.
     // Demuestra que las dos técnicas cambian el trabajo que hace el renderer.
     aim_ship(&mut g, BELT_SHOT, 0);
@@ -576,6 +728,15 @@ fn aim_ship_at(g: &mut Game, pos: Vec3, target: Vec3) {
     g.ship.yaw = (-d.x).atan2(-d.z);
     g.ship.pitch = d.y.asin();
     g.camera = ChaseCamera::new(&g.ship);
+}
+
+/// Escribe un texto centrado a lo ancho del lienzo del HUD, a la altura `y`.
+macro_rules! draw_centered {
+    ($d:expr, $text:expr, $y:expr, $size:expr, $color:expr) => {{
+        let text: &str = $text;
+        let w = $d.measure_text(text, $size);
+        $d.draw_text(text, (WINDOW_W - w) / 2, $y, $size, $color);
+    }};
 }
 
 fn read_input(rl: &RaylibHandle) -> ShipInput {
@@ -768,6 +929,21 @@ fn main() {
                 }
             }
 
+            // Letreros al centro: la explosión o, si no, el aviso de calor.
+            if let Some(e) = &game.explosion {
+                let left = (EXPLOSION_TIME - e.age).max(0.0).ceil() as i32;
+                let world = hud::to_ascii(game.scene.bodies[game.state.warp_target].name);
+                draw_centered!(d, "NAVE DESTRUIDA", WINDOW_H / 2 - 80, 48, Color::new(255, 90, 40, 255));
+                draw_centered!(d, &format!("reapareciendo en {left} s junto a {world}"), WINDOW_H / 2 - 22, 22, Color::RAYWHITE);
+                draw_centered!(d, "[1-5] elegir otro mundo", WINDOW_H / 2 + 8, 18, Color::GOLD);
+            } else if game.heat > HEAT_WARNING {
+                // cuando ya es peligroso el letrero parpadea
+                if game.heat < HEAT_DANGER || (game.time * 6.0).sin() > -0.3 {
+                    draw_centered!(d, "ALERTA: CALOR EXTREMO", 130, 30, Color::new(255, 80, 30, 255));
+                    draw_centered!(d, "alejate del Sol o la nave explota", 166, 20, Color::ORANGE);
+                }
+            }
+
             // Ficha del planeta escaneado (el fondo ya lo pintó draw_overlay en el framebuffer).
             if let Some(i) = game.card_body {
                 let b = &game.scene.bodies[i];
@@ -878,6 +1054,109 @@ mod tests {
 
         g.draw_geometry();
         assert_eq!(g.renderer.stats.objects_drawn, before - 1);
+    }
+
+    // pone la nave casi tocando el cuerpo i, bajando hacia él a 20
+    fn ship_falling_on(g: &mut Game, i: usize) {
+        let center = g.scene.body_position(i, g.time);
+        let reach = ship::collision_radius(g.scene.bodies[i].radius);
+        g.ship.position = center + Vec3::new(0.0, reach + 0.2, 0.0);
+        g.ship.velocity = Vec3::new(0.0, -20.0, 0.0);
+    }
+
+    // corre cuadros vacios hasta q termine la explosion (con tope por si nunca acaba)
+    fn wait_explosion(g: &mut Game) {
+        let mut t = 0.0;
+        while g.explosion.is_some() && t < EXPLOSION_TIME + 1.0 {
+            g.update(ShipInput::default(), 1.0 / 60.0);
+            t += 1.0 / 60.0;
+        }
+    }
+
+    #[test]
+    fn el_sol_destruye_la_nave_y_reaparece_en_el_destino() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        g.state.warp_target = 3;
+        let sun = g.sun.unwrap();
+        ship_falling_on(&mut g, sun);
+        g.update(ShipInput::default(), dt);
+        assert!(g.explosion.is_some());
+
+        // explotando no hay controles: ni acelerar, ni warp, ni orbita
+        let pos = g.ship.position;
+        g.update(ShipInput { thrust: 1.0, warp: true, orbit_toggle: true, ..Default::default() }, dt);
+        assert_eq!((g.ship.position - pos).length(), 0.0);
+        assert!(!g.ship.warping());
+
+        // al terminar reaparece junto a Gotham, lista pa enganchar la orbita con F
+        wait_explosion(&mut g);
+        assert!(g.explosion.is_none());
+        g.update(ShipInput::default(), dt);
+        assert_eq!(g.state.nearest, Some(3));
+        assert!(interaction::orbit_in_range(&g.state, &g.scene));
+        assert_eq!(g.heat, 0.0);
+    }
+
+    #[test]
+    fn los_planetas_no_destruyen_la_nave() {
+        let mut g = Game::new();
+        ship_falling_on(&mut g, 1);
+        g.update(ShipInput::default(), 1.0 / 60.0);
+        assert!(g.explosion.is_none());
+        assert!(g.ship.impact > 0.0, "si choco, pero solo rebota");
+    }
+
+    #[test]
+    fn el_calor_sube_al_acercarse_al_sol() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        // donde arranca el juego no hay calor
+        g.update(ShipInput::default(), dt);
+        assert_eq!(g.heat, 0.0);
+
+        // a 4 de la colision ya es peligroso, pero todavia no explota
+        let s = g.sun.unwrap();
+        let reach = ship::collision_radius(g.scene.bodies[s].radius);
+        g.ship.position = g.scene.body_position(s, g.time) + Vec3::new(0.0, 0.0, reach + 4.0);
+        g.ship.velocity = Vec3::ZERO;
+        g.update(ShipInput::default(), dt);
+        assert!(g.heat > HEAT_DANGER, "calor {}", g.heat);
+        assert!(g.explosion.is_none());
+    }
+
+    #[test]
+    fn en_modo_foto_la_explosion_se_congela() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        let sun = g.sun.unwrap();
+        ship_falling_on(&mut g, sun);
+        g.update(ShipInput::default(), dt);
+        g.update(ShipInput { photo: true, ..Default::default() }, dt);
+        let age = g.explosion.as_ref().unwrap().age;
+        for _ in 0..(EXPLOSION_TIME / dt) as usize + 30 {
+            g.update(ShipInput::default(), dt);
+        }
+        // pasaron mas de 3 s y la explosion sigue igual
+        assert_eq!(g.explosion.as_ref().unwrap().age, age);
+
+        // al salir del modo foto sigue y termina
+        g.update(ShipInput { photo: true, ..Default::default() }, dt);
+        wait_explosion(&mut g);
+        assert!(g.explosion.is_none());
+    }
+
+    #[test]
+    fn durante_la_explosion_se_elige_donde_reaparecer() {
+        let mut g = Game::new();
+        let dt = 1.0 / 60.0;
+        let sun = g.sun.unwrap();
+        ship_falling_on(&mut g, sun);
+        g.update(ShipInput::default(), dt);
+        g.update(ShipInput { select: Some(5), ..Default::default() }, dt);
+        wait_explosion(&mut g);
+        g.update(ShipInput::default(), dt);
+        assert_eq!(g.state.nearest, Some(5));
     }
 
     #[test]

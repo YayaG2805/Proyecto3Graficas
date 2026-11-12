@@ -151,6 +151,18 @@ def turbo():
     return rugido + silbido * 0.35 + zumbido * 0.4
 
 
+def alarma_calor():
+    # 2 s: cuatro pitidos (agudo, grave, agudo, grave). Cada pitido arranca y termina en 0,
+    # asi que el loop cierra solo. Las frecuencias dan vueltas enteras en cada pitido.
+    salida = np.zeros(int(2.0 * SR))
+    t = tiempo(0.3)
+    envolvente = np.minimum(np.minimum(t / 0.01, 1), np.minimum((0.3 - t) / 0.03, 1))
+    for k, f in enumerate([880.0, 660.0, 880.0, 660.0]):
+        pitido = sum(seno(f * n, t) / n for n in (1, 3, 5)) * envolvente  # casi cuadrada
+        poner(salida, pitido, 0.5 * k)
+    return salida
+
+
 def warp_crucero():
     # 4 s. Los pares 220/220.25 Hz "baten" 1 vez por loop: un brillo que respira.
     t = tiempo(4.0)
@@ -353,6 +365,18 @@ def error():
     return salida
 
 
+def explosion():
+    # 3 s: golpe grave que cae, whoosh del fuego de agudo a grave, y pedazos que truenan despues.
+    t = tiempo(3.0)
+    golpe = barrido(3.0, 90, 25, (1.0, 0.5)) * np.exp(-t * 2.2)
+    fuego = normal(ruido_barrido(3.0, 4000, 120, 0.5)) * np.exp(-t * 1.4)
+    rugido = normal(filtro(ruido(len(t)), 20, 250)) * np.exp(-t * 1.0)
+    salida = normal(golpe) + fuego * 0.8 + rugido * 0.7
+    for _ in range(14):
+        poner(salida, normal(chispa(rng.uniform(0.01, 0.04))) * rng.uniform(0.1, 0.3), rng.uniform(0.3, 2.2))
+    return salida * np.minimum(t / 0.004, 1)
+
+
 def rayo():
     # Descarga de Central City: chisporroteo que se corta a pedazos + un trueno chico.
     t = tiempo(0.7)
@@ -363,7 +387,7 @@ def rayo():
     return chispas + silbido * 0.3 + trueno * 0.5
 
 
-LOOPS = [motor, turbo, warp_crucero, amb_sol, amb_themyscira, amb_krypton, amb_gotham, amb_atlantis, amb_oa, amb_central_city]
+LOOPS = [motor, turbo, warp_crucero, alarma_calor, amb_sol, amb_themyscira, amb_krypton, amb_gotham, amb_atlantis, amb_oa, amb_central_city]
 EFECTOS = [warp_carga, warp_salto, warp_llegada, warp_cancelar, choque, escaneo, cristal, cristales_completos, destino, foto, interruptor, error, rayo]
 
 if __name__ == "__main__":
@@ -373,3 +397,6 @@ if __name__ == "__main__":
         guardar(generar.__name__, generar())
     guardar("orbita_enganchar", dos_tonos(660, 990))
     guardar("orbita_soltar", dos_tonos(990, 660))
+    # Los nuevos van al final: todos comparten la secuencia de numeros al azar, asi los de
+    # arriba siguen saliendo identicos aunque se agreguen sonidos.
+    guardar("explosion", explosion())
