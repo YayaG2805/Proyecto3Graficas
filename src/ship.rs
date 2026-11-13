@@ -33,8 +33,6 @@ const ENGINE_IDLE_GLOW: f32 = 0.25;
 const ENGINE_MAX_GLOW: f32 = 1.6;
 // a esta velocidad los motores ya estan a todo
 const ENGINE_FULL_SPEED: f32 = 40.0;
-// color del casco al rojo vivo cuando la nave se acerca mucho al sol
-const HULL_HOT_COLOR: Vec3 = Vec3 { x: 1.0, y: 0.32, z: 0.05 };
 
 // --- giro de la nave, tambien se pueden mover en vivo ---
 // cuanto sube la velocidad de giro por segundo mientras tenes la tecla (rad/s²)
@@ -714,8 +712,6 @@ fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
 pub struct HalconShader {
     /// viene de Ship::engine_glow, de 0 a 1
     pub engine_glow: f32,
-    /// q tan cerca del sol va, de 0 a 1 (viene de Game::heat): el casco se pone al rojo vivo
-    pub heat: f32,
 }
 
 impl FragmentShader for HalconShader {
@@ -756,11 +752,7 @@ impl FragmentShader for HalconShader {
         // paso 7: entre mas rapido va la nave mas fuerte el brillo, y se suma encima de la luz
         // no depende del sol, por eso tambien se ve del lado oscuro
         let glow = ENGINE_IDLE_GLOW + (ENGINE_MAX_GLOW - ENGINE_IDLE_GLOW) * self.engine_glow;
-
-        // paso 8: el calor del sol, brilla solo (emisivo) y mas del lado q mira al sol
-        // va al cuadrado pa q de lejos casi no se note y cerca suba rapido
-        let hot = self.heat * self.heat * (0.3 + 0.7 * diff);
-        lit + ENGINE_COLOR * (back * band * glow) + HULL_HOT_COLOR * (hot * 1.2)
+        lit + ENGINE_COLOR * (back * band * glow)
     }
 }
 

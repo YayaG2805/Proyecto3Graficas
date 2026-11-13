@@ -10,7 +10,7 @@ raylib solo se usa para abrir la ventana, leer el teclado, mostrar el framebuffe
 
 | Integrante | Contribución |
 |------------|--------------|
-| Diego Sandoval | Modelo del Halcón Milenario en Blender; planetas Themyscira, Krypton, Gotham, Atlantis y Oa (superficies y shaders); objetos de superficie (árboles, cristales, edificios, corales) y su distribución procedural; pantalla completa; sonido; aviso de calor y explosión al chocar con el Sol; tour automático y pantalla de inicio; Apokolips (planeta, Boom Tube, Darkseid y su nave) |
+| Diego Sandoval | Modelo del Halcón Milenario en Blender; planetas Themyscira, Krypton, Gotham, Atlantis y Oa (superficies y shaders); objetos de superficie (árboles, cristales, edificios, corales) y su distribución procedural; pantalla completa; sonido; tour automático y pantalla de inicio; Apokolips (planeta, Boom Tube, Darkseid y su nave) |
 | Diego Guevara | Base del motor (pipeline de render, sol, planeta y nave); órbitas visibles; mapeo de normales; cielo con nebulosa y agujero negro; efecto visual del warp; HUD con ficha y radar; luna Central City; cinturón de asteroides y cometa; personajes de la Liga; monumentos y detalles de cada mundo; optimizaciones del renderer |
 | Adrián López | Giro progresivo; gravedad de los planetas; modo órbita; viaje warp; estado del juego y teclas (escaneo, destino, modo foto); cristales coleccionables; niveles de detalle (`draw_lods`); paneles y motores del shader del Halcón |
 
@@ -34,15 +34,15 @@ Otros modos:
 cargo run --release -- --snapshot
 ```
 
-Sin abrir la ventana, guarda capturas `snap_*.ppm` de cada mundo, monumento, personaje, la
-explosión y la pantalla de inicio, e imprime los milisegundos por cuadro. Al final compara el
+Sin abrir la ventana, guarda capturas `snap_*.ppm` de cada mundo, monumento, personaje y la
+pantalla de inicio, e imprime los milisegundos por cuadro. Al final compara el
 cinturón de asteroides con culling y LOD prendidos y apagados.
 
 ```bash
 cargo test --release
 ```
 
-Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, explosión, Apokolips, sonidos, etc.
+Corre las pruebas: órbitas, colisiones, gravedad, warp, tour, Apokolips, sonidos, etc.
 
 ## Controles
 
@@ -80,10 +80,9 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 2. Para pilotear: **1–5** para elegir un mundo, **Tab** para viajar, **F** al llegar para rodearlo,
    **E** para ver su ficha, **R** para jugar el minijuego de ese mundo, y **F** o **Shift**
    para alejarse.
-3. Con **C** y **L** se ve en el HUD cómo cambian los objetos y triángulos procesados.
-4. Si la nave se acerca demasiado al Sol aparece el aviso de calor; si lo toca, explota y
-   reaparece junto al mundo elegido.
-5. Al juntar los 10 cristales (o con **K**) se abre un Boom Tube y aparece **Apokolips**, el
+3. Con **H** se abre el HUD completo (fps, objetos/triángulos, destino) para ver cómo cambian
+   con **C** (culling) y **L** (LOD); normalmente queda oculto para no tapar la pantalla.
+4. Al juntar los 10 cristales (o con **K**) se abre un Boom Tube y aparece **Apokolips**, el
    mundo de Darkseid: se viaja con **6** y se rodea y escanea como los demás.
 
 ## Características del menú que solicitamos evaluar
@@ -120,8 +119,8 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
   Gotham, Oa y los cráteres de Central City (funciones `*_surface` en `src/scene.rs`).
 - **Generación / subdivisión procedural de geometría antes de rasterizar:** las esferas son
   icosferas subdivididas (`Mesh::icosphere` en `src/mesh.rs`). También se generan en el pipeline
-  la llama del turbo, anillos, cúpulas, conos de luz y los pedazos de la nave al explotar
-  (`src/explosion.rs`).
+  la llama del turbo, los anillos de las puertas de los minijuegos (`Mesh::torus`) y otras
+  geometrías (anillos, cúpulas, conos de luz) en `src/mundos/` y `src/oa.rs`.
 
 ### Navegación
 
@@ -133,8 +132,8 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 - **Aceleración, frenado y giro progresivos e independientes de los FPS:** todo se multiplica por
   `dt` y los frenos usan exponenciales (hay pruebas que comparan 30 y 144 FPS).
 - **Atracción gravitatoria:** cada cuerpo jala la nave con `a = gravedad / d²` (tecla **G**).
-- **Colisión básica:** la nave no puede atravesar ningún cuerpo (`Ship::collide`). Tocar el Sol
-  destruye la nave.
+- **Colisión básica:** la nave no puede atravesar ningún cuerpo (`Ship::collide`), el Sol
+  incluido: rebota como con cualquier otro cuerpo, sin consecuencias especiales.
 
 ### Rendimiento
 
@@ -180,7 +179,6 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 - Cristales coleccionables alrededor de cada mundo, radar, ficha de escaneo y modo foto.
 - Sonido: motor, warp, efectos y un ambiente por mundo (`src/audio.rs`). Los `.wav` se generan con
   `assets/sonidos/generar_sonidos.py` (Python + numpy).
-- Aviso de calor y explosión al chocar con el Sol (`src/explosion.rs`).
 - Pantalla de inicio y tour automático (`src/tour.rs`).
 - Premio de los cristales: **Apokolips** (`src/apokolips.rs`). Un portal (Boom Tube) se abre y
   el planeta crece desde su centro. Tiene corteza de celdas Voronoi con fosos de fuego y grietas
@@ -202,7 +200,6 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 | `src/mundos/`, `src/oa.rs` | Monumentos y detalles de cada mundo |
 | `src/creatures.rs` | Personajes de la Liga |
 | `src/exotics.rs` | Cinturón de asteroides y cometa |
-| `src/explosion.rs` | Explosión de la nave y reaparición |
 | `src/tour.rs` | Tour automático |
 | `src/apokolips.rs` | Apokolips, el Boom Tube, Darkseid y su nave |
 | `src/audio.rs` | Sonido |

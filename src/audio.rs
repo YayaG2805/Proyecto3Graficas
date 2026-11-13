@@ -31,10 +31,6 @@ const TONO_MOTOR_MIN: f32 = 0.8;
 const TONO_MOTOR_MAX: f32 = 1.5;
 const VOL_TURBO: f32 = 0.55;
 const VOL_WARP: f32 = 0.6;
-/// Alarma de calor: empieza a sonar con este calor y llega a todo volumen con el otro.
-const VOL_ALARMA: f32 = 0.45;
-const ALARMA_DESDE: f32 = 0.25;
-const ALARMA_TODA: f32 = 0.8;
 
 // --- Ambientes de los mundos ---
 const VOL_AMBIENTE: f32 = 0.55;
@@ -56,7 +52,7 @@ const CHOQUE_ESPERA: f32 = 0.5;
 const ESCALA_CRISTALES: [f32; 10] = [0.0, 2.0, 4.0, 7.0, 9.0, 12.0, 14.0, 16.0, 19.0, 21.0];
 
 /// Loops de la nave, en el orden en que se cargan.
-pub const LOOPS: [&str; 4] = ["motor", "turbo", "warp_crucero", "alarma_calor"];
+pub const LOOPS: [&str; 3] = ["motor", "turbo", "warp_crucero"];
 
 /// Los efectos que suenan una vez. El número de cada uno es su lugar en `Sonidos::efectos`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -76,12 +72,11 @@ pub enum Efecto {
     Interruptor,
     Error,
     Rayo,
-    Explosion,
     BoomTube,
 }
 
 impl Efecto {
-    pub const TODOS: [Efecto; 17] = [
+    pub const TODOS: [Efecto; 16] = [
         Efecto::WarpCarga,
         Efecto::WarpSalto,
         Efecto::WarpLlegada,
@@ -97,7 +92,6 @@ impl Efecto {
         Efecto::Interruptor,
         Efecto::Error,
         Efecto::Rayo,
-        Efecto::Explosion,
         Efecto::BoomTube,
     ];
 
@@ -119,7 +113,6 @@ impl Efecto {
             Efecto::Interruptor => "interruptor",
             Efecto::Error => "error",
             Efecto::Rayo => "rayo",
-            Efecto::Explosion => "explosion",
             Efecto::BoomTube => "boom_tube",
         }
     }
@@ -132,7 +125,7 @@ impl Efecto {
             Efecto::Destino => 0.5,
             Efecto::Foto => 0.9,
             Efecto::CristalesCompletos => 0.9,
-            Efecto::Explosion | Efecto::BoomTube => 1.0,
+            Efecto::BoomTube => 1.0,
             _ => 0.7,
         }
     }
@@ -202,7 +195,6 @@ struct Antes {
     orbita: Option<usize>,
     cristales: u32,
     tiempo: f32,
-    explotando: bool,
     portal: bool,
 }
 
@@ -213,7 +205,6 @@ pub struct Sonidos<'a> {
     motor: Option<Music<'a>>,
     turbo: Option<Music<'a>>,
     warp: Option<Music<'a>>,
-    alarma: Option<Music<'a>>,
     /// (nombre del mundo, su loop de ambiente). Se busca por nombre en cada cuadro: así también
     /// suena el de un mundo que aparece a medio juego (Apokolips).
     ambientes: Vec<(&'static str, Music<'a>)>,
@@ -227,7 +218,7 @@ pub struct Sonidos<'a> {
 
 impl<'a> Sonidos<'a> {
     pub fn new(audio: &'a RaylibAudio, scene: &Scene) -> Sonidos<'a> {
-        let [motor, turbo, warp, alarma] = LOOPS.map(|nombre| cargar_loop(audio, nombre));
+        let [motor, turbo, warp] = LOOPS.map(|nombre| cargar_loop(audio, nombre));
         let ambientes = scene
             .bodies
             .iter()
@@ -241,11 +232,10 @@ impl<'a> Sonidos<'a> {
             motor,
             turbo,
             warp,
-            alarma,
             ambientes,
             efectos: Efecto::TODOS.iter().map(|&e| cargar_efecto(audio, e)).collect(),
             luna_rayos: body(scene, "Central City"),
-            antes: Antes { fase: None, orbita: None, cristales: 0, tiempo: 0.0, explotando: false, portal: false },
+            antes: Antes { fase: None, orbita: None, cristales: 0, tiempo: 0.0, portal: false },
             espera_choque: 0.0,
         }
     }
@@ -271,10 +261,8 @@ impl<'a> Sonidos<'a> {
         let (ship, st) = (&g.ship, &g.state);
         // En modo foto la nave está congelada: sus loops se callan, los ambientes siguen.
         let congelado = st.photo_mode;
-        // Mientras explota la nave no existe: tampoco suenan sus loops ni sus efectos.
-        let explotando = g.explosion.is_some();
         // En la pantalla de inicio la nave tampoco vuela.
-        let callada = congelado || explotando || g.title;
+        let callada = congelado || g.title;
 
         // --- 1. Loops de la nave ---
         let brillo = ship.engine_glow();
@@ -282,8 +270,6 @@ impl<'a> Sonidos<'a> {
         ajustar(self.motor.as_ref(), motor, mezcla(TONO_MOTOR_MIN, TONO_MOTOR_MAX, brillo), 0.5);
         ajustar(self.turbo.as_ref(), if callada { 0.0 } else { VOL_TURBO * ship.boost }, 1.0, 0.5);
         ajustar(self.warp.as_ref(), if callada { 0.0 } else { VOL_WARP * g.warp }, 1.0, 0.5);
-        let alarma = if callada { 0.0 } else { VOL_ALARMA * smoothstep(ALARMA_DESDE, ALARMA_TODA, g.heat) };
-        ajustar(self.alarma.as_ref(), alarma, 1.0, 0.5);
 
         // --- 2. Ambientes: más fuerte entre más cerca, y del lado donde está el mundo ---
         let (derecha, _, _) = g.camera.basis();
@@ -310,20 +296,9 @@ impl<'a> Sonidos<'a> {
             self.tocar(Efecto::BoomTube);
         }
 
-        // --- 3. La explosión: empieza (BUM) y termina (la nave reaparece) ---
-        if explotando && !self.antes.explotando {
-            if let Some(s) = self.efecto(Efecto::WarpCarga) {
-                s.stop();
-            }
-            self.tocar(Efecto::Explosion);
-        } else if !explotando && self.antes.explotando {
-            self.tocar(Efecto::WarpLlegada);
-        }
-
-        // --- 4. Efectos de la nave (en modo foto no cambia nada, así que no suenan; al explotar
-        // y al reaparecer la nave cambia de golpe, y esos cambios no son del jugador) ---
+        // --- 4. Efectos de la nave (en modo foto no cambia nada, así que no suenan) ---
         let fase = ship.warp_phase();
-        if !congelado && !explotando && !self.antes.explotando {
+        if !congelado {
             match (self.antes.fase, fase) {
                 (None, Some(_)) => self.tocar(Efecto::WarpCarga),
                 (Some(WarpPhase::Align), Some(WarpPhase::Accelerate)) => self.tocar(Efecto::WarpSalto),
@@ -376,7 +351,7 @@ impl<'a> Sonidos<'a> {
         }
 
         // --- 5. Efectos que funcionan siempre, también en modo foto ---
-        if input.scan && !explotando {
+        if input.scan {
             let en_rango = st.nearest.is_some_and(|i| st.nearest_dist < crate::SCAN_HINT_RADII * g.scene.bodies[i].radius);
             self.tocar(if en_rango { Efecto::Escaneo } else { Efecto::Error });
         }
@@ -397,7 +372,7 @@ impl<'a> Sonidos<'a> {
             }
         }
 
-        self.antes = Antes { fase, orbita: st.orbit_lock, cristales: st.collected, tiempo: g.time, explotando, portal };
+        self.antes = Antes { fase, orbita: st.orbit_lock, cristales: st.collected, tiempo: g.time, portal };
     }
 }
 
