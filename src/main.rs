@@ -1115,6 +1115,13 @@ fn main() {
                     }
                 }
 
+                // Al enganchar la órbita bien arriba, la nave desciende sola hacia la
+                // superficie (como aterrizando); mientras dura, un aviso para que no
+                // sorprenda y sepan que las flechas toman el control en cualquier momento.
+                if game.ship.orbit_landing() {
+                    d.draw_text("aterrizando... (flechas para tomar el control)", 10, 146, 18, Color::SKYBLUE);
+                }
+
                 // Minijuego del mundo: distinto segun el mundo (circuito de aros, esquiva de
                 // peligros o tocar objetivos). Progreso si esta en curso, si no un aviso para
                 // empezarlo (solo se puede en orbita) y, al terminar, el resultado.

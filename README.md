@@ -126,7 +126,10 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 ### Navegación
 
 - **Modo de control local para rodear un planeta:** tecla **F** (modo órbita en `src/ship.rs`):
-  W/S avanzan alrededor del planeta, A/D cambian el rumbo y las flechas, la altura.
+  W/S avanzan alrededor del planeta, A/D cambian el rumbo y las flechas, la altura. Si se
+  engancha bien arriba, la nave **desciende sola** hasta quedar cerca de la superficie —como
+  aterrizando, sin tocarla ni cambiar de escena— y las flechas toman el control de la altura
+  en cualquier momento (`Ship::orbit_landing`, con pruebas en `src/ship.rs`).
 - **Aceleración, frenado y giro progresivos e independientes de los FPS:** todo se multiplica por
   `dt` y los frenos usan exponenciales (hay pruebas que comparan 30 y 144 FPS).
 - **Atracción gravitatoria:** cada cuerpo jala la nave con `a = gravedad / d²` (tecla **G**).

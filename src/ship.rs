@@ -56,6 +56,14 @@ const ROLL_RESPONSE: f32 = 6.0;
 // el empuje normal de la nave es 20, mientras esto sea menor siempre se puede escapar
 const MAX_GRAVITY_ACCEL: f32 = 12.0;
 
+// --- aterrizaje automatico (al enganchar lejos, la nave baja sola) ---
+// si al enganchar estamos mas alto q el "piso" de aterrizaje por al menos esto, bajamos solos
+const ORBIT_LANDING_TRIGGER_EXTRA: f32 = 1.0;
+// el piso de aterrizaje queda esto arriba del piso de colision (en radios del planeta)
+const ORBIT_LANDING_MARGIN_RADII: f32 = 0.25;
+// q tan rapido desciende, independiente de los fps
+const ORBIT_LANDING_RESPONSE: f32 = 1.2;
+
 // --- modo orbita ---
 // empuje con w/s mientras rodeamos el planeta
 const ORBIT_ACCEL: f32 = 6.0;
@@ -151,6 +159,9 @@ struct Orbit {
     speed: f32,
     /// a q velocidad va subiendo o bajando
     climb_rate: f32,
+    /// si no es None, la nave esta bajando sola hacia esta altura (aterrizaje automatico al
+    /// enganchar lejos); se apaga sola al llegar o en cuanto el jugador toque las flechas
+    target_altitude: Option<f32>,
 }
 
 pub struct Ship {
@@ -264,6 +275,11 @@ impl Ship {
         self.orbit.as_ref().map(|o| o.body)
     }
 
+    /// si la nave esta bajando sola hacia la superficie (aterrizaje automatico recien enganchado)
+    pub fn orbit_landing(&self) -> bool {
+        self.orbit.as_ref().is_some_and(|o| o.target_altitude.is_some())
+    }
+
     /// se engancha al cuerpo i desde donde este la nave ahorita, sin mover nada de golpe
     pub fn engage_orbit(&mut self, i: usize, scene: &Scene, t: f32) {
         // paso 1: el "arriba" es la linea q va del centro del planeta a la nave
@@ -283,14 +299,21 @@ impl Ship {
         // paso 3: la velocidad con la q vamos respecto al planeta, q tambien se esta moviendo
         let relative = self.velocity - body_velocity(scene, i, t);
 
-        // paso 4: la orbita arranca con el movimiento q ya traia, asi no se siente un frenon
+        // paso 4: si enganchamos bien arriba, la nave va a bajar sola hasta un piso cercano a
+        // la superficie (como si fuera aterrizando); si ya veniamos cerca no hace falta
+        let altitude = distance - radius;
+        let landing_altitude = collision_radius(radius) - radius + ORBIT_MIN_ALT + radius * ORBIT_LANDING_MARGIN_RADII;
+        let target_altitude = (altitude > landing_altitude + ORBIT_LANDING_TRIGGER_EXTRA).then_some(landing_altitude);
+
+        // paso 5: la orbita arranca con el movimiento q ya traia, asi no se siente un frenon
         self.orbit = Some(Orbit {
             body: i,
             normal,
             heading,
-            altitude: distance - radius,
+            altitude,
             speed: relative.dot(heading),
             climb_rate: relative.dot(normal).clamp(-ORBIT_CLIMB_MAX, ORBIT_CLIMB_MAX),
+            target_altitude,
         });
         self.orbit_forward = heading;
         self.orbit_up = normal;
@@ -337,10 +360,25 @@ impl Ship {
         // los redondeos los van separando de a poquito, asi los regreso al angulo recto
         o.heading = (o.heading - o.normal * o.heading.dot(o.normal)).normalized();
 
-        // paso 4: las flechas cambian la altura
-        let old_climb = o.climb_rate;
-        o.climb_rate = next_spin_rate(o.climb_rate, input.climb, ORBIT_CLIMB_ACCEL, ORBIT_CLIMB_MAX, dt);
-        o.altitude += (old_climb + o.climb_rate) * 0.5 * dt;
+        // paso 4: si veniamos aterrizando solos, seguimos bajando mientras no toquen las
+        // flechas; en cuanto las tocan o llegamos, el jugador maneja la altura de ahi en mas
+        if let Some(target) = o.target_altitude {
+            if input.climb != 0.0 {
+                o.target_altitude = None;
+            } else {
+                o.altitude += (target - o.altitude) * (1.0 - (-ORBIT_LANDING_RESPONSE * dt).exp());
+                o.climb_rate = 0.0;
+                if (o.altitude - target).abs() < 0.05 {
+                    o.target_altitude = None;
+                }
+            }
+        }
+        if o.target_altitude.is_none() {
+            // las flechas cambian la altura
+            let old_climb = o.climb_rate;
+            o.climb_rate = next_spin_rate(o.climb_rate, input.climb, ORBIT_CLIMB_ACCEL, ORBIT_CLIMB_MAX, dt);
+            o.altitude += (old_climb + o.climb_rate) * 0.5 * dt;
+        }
 
         // paso 5: los limites de altura, el de abajo empuja suave por si enganchamos muy pegados
         let min_altitude = collision_radius(radius) - radius + ORBIT_MIN_ALT;
@@ -1046,6 +1084,46 @@ mod tests {
         let bottom = run(&mut ship, -1.0);
         assert!(bottom >= collision_radius(radius) - radius);
         println!("altura en krypton: de {bottom:.2} a {top:.2}");
+    }
+
+    #[test]
+    fn enganchar_de_lejos_baja_solo_como_aterrizando() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let radius = scene.bodies[1].radius;
+        // bien arriba (2.5 radios): tiene q disparar el descenso automatico
+        let mut ship = orbiting_ship(&scene, 1, Vec3::UP, radius * 2.5);
+        assert!(ship.orbit.as_ref().unwrap().target_altitude.is_some(), "deberia empezar a bajar solo");
+
+        for step in 1..=600 {
+            ship.update(ShipInput::default(), dt, &scene, step as f32 * dt);
+        }
+        let o = ship.orbit.as_ref().unwrap();
+        assert!(o.target_altitude.is_none(), "ya deberia haber llegado y soltado el control de la altura");
+        let min_altitude = collision_radius(radius) - radius + ORBIT_MIN_ALT;
+        println!("bajo de {:.2} a {:.2} radios (piso en {:.2})", radius * 2.5, o.altitude, min_altitude);
+        assert!(o.altitude < radius, "deberia haber bajado bastante, quedo en {:.2}", o.altitude);
+        assert!(o.altitude >= min_altitude - 0.01);
+    }
+
+    #[test]
+    fn tocar_las_flechas_cancela_el_aterrizaje_automatico() {
+        let scene = Scene::new();
+        let dt = 1.0 / 60.0;
+        let radius = scene.bodies[1].radius;
+        let mut ship = orbiting_ship(&scene, 1, Vec3::UP, radius * 2.5);
+        assert!(ship.orbit.as_ref().unwrap().target_altitude.is_some());
+
+        ship.update(ShipInput { climb: 1.0, ..Default::default() }, dt, &scene, dt);
+        assert!(ship.orbit.as_ref().unwrap().target_altitude.is_none(), "al tocar las flechas el jugador toma el control de una");
+    }
+
+    #[test]
+    fn si_ya_veniamos_cerca_no_hay_aterrizaje_automatico() {
+        let scene = Scene::new();
+        // la misma altura (3.0) q usan las demas pruebas de orbita: no se deberia disparar
+        let ship = orbiting_ship(&scene, 1, Vec3::UP, 3.0);
+        assert!(ship.orbit.as_ref().unwrap().target_altitude.is_none());
     }
 
     #[test]
