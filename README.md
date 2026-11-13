@@ -85,6 +85,13 @@ Cualquier tecla de vuelo detiene el tour y devuelve el control.
 4. Al juntar los 10 cristales (o con **K**) se abre un Boom Tube y aparece **Apokolips**, el
    mundo de Darkseid: se viaja con **6** y se rodea y escanea como los demás.
 
+## Video del recorrido
+
+[Ver en YouTube](https://youtu.be/Td58VnA-4-8) (2:08, 1280×720, sin sonido): pantalla de inicio, HUD con
+los contadores al prender y apagar **C**, **L** y **O**, mapeo de normales con **N**, y el tour
+automático por los seis mundos (vuelo espacial, warp, acercamiento, escaneo, vuelta alrededor del
+planeta y alejamiento), con el Boom Tube y Apokolips a la mitad.
+
 ## Características del menú que solicitamos evaluar
 
 ### Planetas

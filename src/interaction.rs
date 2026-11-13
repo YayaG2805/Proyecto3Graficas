@@ -501,14 +501,15 @@ impl GameState {
 
     /// si el mundo i tiene un reto (el sol y las lunas no), y como se llama, pa el aviso del hud
     pub fn minigame_name(&self, body: usize) -> Option<&'static str> {
-        self.world_games[body].as_ref().map(|g| g.name)
+        // con get un cuerpo q aparecio despues (apokolips) no truena, solo no tiene reto
+        self.world_games.get(body).and_then(Option::as_ref).map(|g| g.name)
     }
 
     /// lo q el hud necesita pa mostrar el minijuego en curso
     pub fn minigame_hud(&self) -> Option<(usize, MinigameHud)> {
         let active = self.active.as_ref()?;
         let body = active.body();
-        match (active, &self.world_games[body].as_ref()?.kind) {
+        match (active, &self.world_games.get(body)?.as_ref()?.kind) {
             (ActiveMinigame::Gates { next, elapsed, gate_elapsed, .. }, WorldGameKind::Gates { gates, gate_deadline }) => {
                 Some((body, MinigameHud::Gates { next: *next, total: gates.len(), elapsed: *elapsed, gate_left: gate_deadline.map(|d| (d - gate_elapsed).max(0.0)) }))
             }
@@ -567,7 +568,7 @@ impl GameState {
             self.active = if self.active.is_some() {
                 None
             } else {
-                ship.orbit_body().and_then(|body| self.world_games[body].as_ref().map(|game| ActiveMinigame::start(body, game)))
+                ship.orbit_body().and_then(|body| self.world_games.get(body).and_then(Option::as_ref).map(|game| ActiveMinigame::start(body, game)))
             };
         }
 
@@ -982,6 +983,15 @@ mod tests {
         let mut ship = ship_above(&scene, 1, 2.0);
         update(&mut state, &mut ship, &scene, &ShipInput { orbit_toggle: true, ..Default::default() }, 0.0, 0.016);
         assert_eq!(state.orbit_lock, None);
+    }
+
+    #[test]
+    fn un_cuerpo_q_aparece_despues_no_truena_el_minijuego() {
+        // apokolips se agrega a la escena despues de crear el estado, asi q su indice no esta en la lista
+        let scene = Scene::new();
+        let state = GameState::new(&scene);
+        let later = scene.bodies.len();
+        assert_eq!(state.minigame_name(later), None);
     }
 
     #[test]
