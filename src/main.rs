@@ -951,7 +951,8 @@ fn main() {
     // Textura donde se copia nuestro framebuffer cada cuadro.
     let image = Image::gen_image_color(RENDER_W as i32, RENDER_H as i32, Color::BLACK);
     let mut texture = rl.load_texture_from_image(&thread, &image).expect("no se pudo crear la textura");
-    let mut show_help = true;
+    // empieza oculta: solo un avisito con la tecla, para no tapar la pantalla todo el rato
+    let mut show_help = false;
 
     while !rl.window_should_close() {
         // dt limitado para que un tirón (p.ej. al mover la ventana) no teletransporte la nave.
@@ -1204,11 +1205,14 @@ fn main() {
                     let help = [
                         "W/S acelerar/frenar   A/D girar   Flechas subir/bajar   Shift turbo   Espacio frenar   F orbita   E escanear".to_string(),
                         format!("1-{} destino   Tab warp/cancelar   G gravedad   P foto   T tour   K portal (demo)   R minijuego (en orbita)", game.scene.worlds().len()),
-                        "C culling   L LOD   O orbitas   N normales   M sonido   H ayuda   F11 pantalla".to_string(),
+                        "C culling   L LOD   O orbitas   N normales   M sonido   H ocultar   F11 pantalla".to_string(),
                     ];
                     for (k, line) in help.iter().enumerate() {
                         d.draw_text(line, 10, WINDOW_H - 70 + 22 * k as i32, 16, Color::GOLD);
                     }
+                } else {
+                    // oculta: dejamos solo el avisito pa que no se les olvide la tecla
+                    d.draw_text("[H] controles", 10, WINDOW_H - 26, 16, Color::GRAY);
                 }
             }
         }
